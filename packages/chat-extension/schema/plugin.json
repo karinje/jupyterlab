@@ -1,0 +1,67 @@
+{
+  "title": "Chat",
+  "description": "Chat extension settings",
+  "type": "object",
+  "properties": {
+    "provider": {
+      "title": "LLM Provider",
+      "description": "The LLM provider to use for chat",
+      "type": "string",
+      "enum": ["openai", "claude", "local"],
+      "default": "openai"
+    },
+    "openaiApiKey": {
+      "title": "OpenAI API Key",
+      "description": "API key for OpenAI services",
+      "type": "string",
+      "default": ""
+    },
+    "openaiModel": {
+      "title": "OpenAI Model",
+      "description": "OpenAI model to use",
+      "type": "string",
+      "enum": ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"],
+      "default": "gpt-3.5-turbo"
+    },
+    "claudeApiKey": {
+      "title": "Claude API Key",
+      "description": "API key for Anthropic Claude services",
+      "type": "string",
+      "default": ""
+    },
+    "claudeModel": {
+      "title": "Claude Model",
+      "description": "Claude model to use",
+      "type": "string",
+      "enum": ["claude-3-sonnet-20240229", "claude-3-opus-20240229", "claude-3-haiku-20240307"],
+      "default": "claude-3-sonnet-20240229"
+    },
+    "localUrl": {
+      "title": "Local Model URL",
+      "description": "URL for local model server (e.g., Ollama)",
+      "type": "string",
+      "default": "http://localhost:11434"
+    },
+    "localModel": {
+      "title": "Local Model",
+      "description": "Local model name to use",
+      "type": "string",
+      "default": "llama2"
+    },
+    "autoExecuteCells": {
+      "title": "Auto Execute Cells",
+      "description": "Automatically execute cells when LLM suggests it",
+      "type": "boolean",
+      "default": false
+    },
+    "maxTokens": {
+      "title": "Max Tokens",
+      "description": "Maximum tokens for LLM responses",
+      "type": "number",
+      "minimum": 100,
+      "maximum": 4000,
+      "default": 2000
+    }
+  },
+  "additionalProperties": false
+} 

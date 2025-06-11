@@ -1,6 +1,9 @@
 {
   "extends": "../../tsconfigbase.test",
-  "include": ["src/*", "test/**/*"],
+  "include": [
+    "src/*",
+    "test/**/*"
+  ],
   "references": [
     {
       "path": "../application"
@@ -28,6 +31,12 @@
     },
     {
       "path": "../celltags-extension"
+    },
+    {
+      "path": "../chat"
+    },
+    {
+      "path": "../chat-extension"
     },
     {
       "path": "../codeeditor"

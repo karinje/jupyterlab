@@ -4,7 +4,9 @@
     "outDir": "lib",
     "rootDir": "src"
   },
-  "include": ["src/*"],
+  "include": [
+    "src/*"
+  ],
   "references": [
     {
       "path": "../application"
@@ -32,6 +34,12 @@
     },
     {
       "path": "../celltags-extension"
+    },
+    {
+      "path": "../chat"
+    },
+    {
+      "path": "../chat-extension"
     },
     {
       "path": "../codeeditor"
