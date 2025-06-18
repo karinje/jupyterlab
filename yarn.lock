@@ -2222,19 +2222,16 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@jupyterlab/application-top@workspace:dev_mode"
   dependencies:
-    "@jupyterlab/application": "file:../packages/application"
+    "@jupyterlab/application": ~4.5.0-alpha.1
     "@jupyterlab/application-extension": ~4.5.0-alpha.1
-    "@jupyterlab/apputils": "file:../packages/apputils"
     "@jupyterlab/apputils-extension": ~4.5.0-alpha.1
     "@jupyterlab/builder": ^4.5.0-alpha.1
     "@jupyterlab/buildutils": ^4.5.0-alpha.1
     "@jupyterlab/cell-toolbar-extension": ~4.5.0-alpha.1
     "@jupyterlab/celltags-extension": ~4.5.0-alpha.1
-    "@jupyterlab/chat": "file:../packages/chat"
-    "@jupyterlab/chat-extension": "file:../packages/chat-extension"
+    "@jupyterlab/chat-extension": ~4.1.0
     "@jupyterlab/codemirror-extension": ~4.5.0-alpha.1
     "@jupyterlab/completer-extension": ~4.5.0-alpha.1
-    "@jupyterlab/console": "file:../packages/console"
     "@jupyterlab/console-extension": ~4.5.0-alpha.1
     "@jupyterlab/coreutils": ~6.5.0-alpha.1
     "@jupyterlab/csvviewer-extension": ~4.5.0-alpha.1
@@ -2303,7 +2300,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@jupyterlab/application@^4.5.0-alpha.1, @jupyterlab/application@workspace:packages/application":
+"@jupyterlab/application@^4.5.0-alpha.1, @jupyterlab/application@workspace:packages/application, @jupyterlab/application@~4.5.0-alpha.1":
   version: 0.0.0-use.local
   resolution: "@jupyterlab/application@workspace:packages/application"
   dependencies:
@@ -2334,34 +2331,6 @@ __metadata:
     typescript: ~5.5.4
   languageName: unknown
   linkType: soft
-
-"@jupyterlab/application@file:../packages/application::locator=%40jupyterlab%2Fapplication-top%40workspace%3Adev_mode":
-  version: 4.5.0-alpha.1
-  resolution: "@jupyterlab/application@file:../packages/application#../packages/application::hash=7cb9b5&locator=%40jupyterlab%2Fapplication-top%40workspace%3Adev_mode"
-  dependencies:
-    "@fortawesome/fontawesome-free": ^5.12.0
-    "@jupyterlab/apputils": ^4.6.0-alpha.1
-    "@jupyterlab/coreutils": ^6.5.0-alpha.1
-    "@jupyterlab/docregistry": ^4.5.0-alpha.1
-    "@jupyterlab/rendermime": ^4.5.0-alpha.1
-    "@jupyterlab/rendermime-interfaces": ^3.13.0-alpha.1
-    "@jupyterlab/services": ^7.5.0-alpha.1
-    "@jupyterlab/statedb": ^4.5.0-alpha.1
-    "@jupyterlab/translation": ^4.5.0-alpha.1
-    "@jupyterlab/ui-components": ^4.5.0-alpha.1
-    "@lumino/algorithm": ^2.0.3
-    "@lumino/application": ^2.4.4
-    "@lumino/commands": ^2.3.2
-    "@lumino/coreutils": ^2.2.1
-    "@lumino/disposable": ^2.1.4
-    "@lumino/messaging": ^2.0.3
-    "@lumino/polling": ^2.1.4
-    "@lumino/properties": ^2.0.3
-    "@lumino/signaling": ^2.1.4
-    "@lumino/widgets": ^2.7.1
-  checksum: 663e5a33898197f8b2a8a1e752d0850a836390adffa159ca7f671be80fc35ccfed5378ac53f63334c578662476be5a4d3fc771dfa3678940f7f27a6ee2e75dad
-  languageName: node
-  linkType: hard
 
 "@jupyterlab/apputils-extension@^4.5.0-alpha.1, @jupyterlab/apputils-extension@workspace:packages/apputils-extension, @jupyterlab/apputils-extension@~4.5.0-alpha.1":
   version: 0.0.0-use.local
@@ -2428,35 +2397,6 @@ __metadata:
     typescript: ~5.5.4
   languageName: unknown
   linkType: soft
-
-"@jupyterlab/apputils@file:../packages/apputils::locator=%40jupyterlab%2Fapplication-top%40workspace%3Adev_mode":
-  version: 4.6.0-alpha.1
-  resolution: "@jupyterlab/apputils@file:../packages/apputils#../packages/apputils::hash=b35661&locator=%40jupyterlab%2Fapplication-top%40workspace%3Adev_mode"
-  dependencies:
-    "@jupyterlab/coreutils": ^6.5.0-alpha.1
-    "@jupyterlab/observables": ^5.5.0-alpha.1
-    "@jupyterlab/rendermime-interfaces": ^3.13.0-alpha.1
-    "@jupyterlab/services": ^7.5.0-alpha.1
-    "@jupyterlab/settingregistry": ^4.5.0-alpha.1
-    "@jupyterlab/statedb": ^4.5.0-alpha.1
-    "@jupyterlab/statusbar": ^4.5.0-alpha.1
-    "@jupyterlab/translation": ^4.5.0-alpha.1
-    "@jupyterlab/ui-components": ^4.5.0-alpha.1
-    "@lumino/algorithm": ^2.0.3
-    "@lumino/commands": ^2.3.2
-    "@lumino/coreutils": ^2.2.1
-    "@lumino/disposable": ^2.1.4
-    "@lumino/domutils": ^2.0.3
-    "@lumino/messaging": ^2.0.3
-    "@lumino/signaling": ^2.1.4
-    "@lumino/virtualdom": ^2.0.3
-    "@lumino/widgets": ^2.7.1
-    "@types/react": ^18.0.26
-    react: ^18.2.0
-    sanitize-html: ~2.12.1
-  checksum: 3f24a48f4f078b5dcbe1bc6248d20b90ab84be41f948fddf1611a4973ed39e00ec68b61a464832ac0ce00e579e834cca8395b5b88eda2953e3cb2558dd54ffdf
-  languageName: node
-  linkType: hard
 
 "@jupyterlab/attachments@^4.5.0-alpha.1, @jupyterlab/attachments@workspace:packages/attachments":
   version: 0.0.0-use.local
@@ -2654,7 +2594,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@jupyterlab/chat-extension@^4.1.0, @jupyterlab/chat-extension@workspace:packages/chat-extension":
+"@jupyterlab/chat-extension@^4.1.0, @jupyterlab/chat-extension@workspace:packages/chat-extension, @jupyterlab/chat-extension@~4.1.0":
   version: 0.0.0-use.local
   resolution: "@jupyterlab/chat-extension@workspace:packages/chat-extension"
   dependencies:
@@ -2670,22 +2610,6 @@ __metadata:
     typescript: ~5.5.4
   languageName: unknown
   linkType: soft
-
-"@jupyterlab/chat-extension@file:../packages/chat-extension::locator=%40jupyterlab%2Fapplication-top%40workspace%3Adev_mode":
-  version: 4.1.0
-  resolution: "@jupyterlab/chat-extension@file:../packages/chat-extension#../packages/chat-extension::hash=cce5eb&locator=%40jupyterlab%2Fapplication-top%40workspace%3Adev_mode"
-  dependencies:
-    "@jupyterlab/application": ^4.5.0-alpha.1
-    "@jupyterlab/apputils": ^4.6.0-alpha.1
-    "@jupyterlab/chat": ^4.1.0
-    "@jupyterlab/notebook": ^4.5.0-alpha.1
-    "@jupyterlab/settingregistry": ^4.5.0-alpha.1
-    "@jupyterlab/ui-components": ^4.5.0-alpha.1
-    "@lumino/commands": ^2.3.2
-    "@lumino/widgets": ^2.7.1
-  checksum: aa06c67fe460f3f75270e4cad57a66599e574e1be688cf638f1e3dd2df0b98f0365edf7fd4fd2df7a2b5ed4d7cfcf5a3829ad1f95f1fa2659d0b03d11494209c
-  languageName: node
-  linkType: hard
 
 "@jupyterlab/chat@^4.1.0, @jupyterlab/chat@workspace:packages/chat":
   version: 0.0.0-use.local
@@ -2707,34 +2631,11 @@ __metadata:
     "@lumino/signaling": ^2.1.4
     "@lumino/widgets": ^2.7.1
     react: ^18.2.0
+    react-dom: ^18.2.0
     rimraf: ~5.0.5
     typescript: ~5.5.4
   languageName: unknown
   linkType: soft
-
-"@jupyterlab/chat@file:../packages/chat::locator=%40jupyterlab%2Fapplication-top%40workspace%3Adev_mode":
-  version: 4.1.0
-  resolution: "@jupyterlab/chat@file:../packages/chat#../packages/chat::hash=184b21&locator=%40jupyterlab%2Fapplication-top%40workspace%3Adev_mode"
-  dependencies:
-    "@jupyterlab/application": ^4.5.0-alpha.1
-    "@jupyterlab/apputils": ^4.6.0-alpha.1
-    "@jupyterlab/cells": ^4.5.0-alpha.1
-    "@jupyterlab/coreutils": ^6.5.0-alpha.1
-    "@jupyterlab/notebook": ^4.5.0-alpha.1
-    "@jupyterlab/rendermime": ^4.5.0-alpha.1
-    "@jupyterlab/services": ^7.5.0-alpha.1
-    "@jupyterlab/settingregistry": ^4.5.0-alpha.1
-    "@jupyterlab/ui-components": ^4.5.0-alpha.1
-    "@lumino/commands": ^2.3.2
-    "@lumino/coreutils": ^2.2.1
-    "@lumino/disposable": ^2.1.4
-    "@lumino/messaging": ^2.0.3
-    "@lumino/signaling": ^2.1.4
-    "@lumino/widgets": ^2.7.1
-    react: ^18.2.0
-  checksum: 47fbb4cea3375032fd3d2434c2a4076e88533a969242b378c6d0347c3d9e2db6119bc9fa89b4dde1518aae9aad997283ee2621dd76c8e4e886cb583dfc28e164
-  languageName: node
-  linkType: hard
 
 "@jupyterlab/codeeditor@^4.5.0-alpha.1, @jupyterlab/codeeditor@workspace:packages/codeeditor":
   version: 0.0.0-use.local
@@ -2946,31 +2847,6 @@ __metadata:
     typescript: ~5.5.4
   languageName: unknown
   linkType: soft
-
-"@jupyterlab/console@file:../packages/console::locator=%40jupyterlab%2Fapplication-top%40workspace%3Adev_mode":
-  version: 4.5.0-alpha.1
-  resolution: "@jupyterlab/console@file:../packages/console#../packages/console::hash=fa8774&locator=%40jupyterlab%2Fapplication-top%40workspace%3Adev_mode"
-  dependencies:
-    "@jupyter/ydoc": ^3.0.4
-    "@jupyterlab/apputils": ^4.6.0-alpha.1
-    "@jupyterlab/cells": ^4.5.0-alpha.1
-    "@jupyterlab/codeeditor": ^4.5.0-alpha.1
-    "@jupyterlab/coreutils": ^6.5.0-alpha.1
-    "@jupyterlab/nbformat": ^4.5.0-alpha.1
-    "@jupyterlab/observables": ^5.5.0-alpha.1
-    "@jupyterlab/rendermime": ^4.5.0-alpha.1
-    "@jupyterlab/services": ^7.5.0-alpha.1
-    "@jupyterlab/translation": ^4.5.0-alpha.1
-    "@jupyterlab/ui-components": ^4.5.0-alpha.1
-    "@lumino/coreutils": ^2.2.1
-    "@lumino/disposable": ^2.1.4
-    "@lumino/dragdrop": ^2.1.6
-    "@lumino/messaging": ^2.0.3
-    "@lumino/signaling": ^2.1.4
-    "@lumino/widgets": ^2.7.1
-  checksum: a34ca2370edeabc066d4a24006b0f144afee4bc3e1ddfe5f60e961e8239e1651b614a6213b07ad856b6ccd06efe06c9d6b78b32da07f452ebab32929f24c3087
-  languageName: node
-  linkType: hard
 
 "@jupyterlab/coreutils@^6.5.0-alpha.1, @jupyterlab/coreutils@workspace:packages/coreutils, @jupyterlab/coreutils@~6.5.0-alpha.1":
   version: 0.0.0-use.local

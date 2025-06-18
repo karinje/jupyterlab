@@ -9,4 +9,4 @@ export * from './tokens';
 export * from './llm';
 export * from './cellmanager';
 export * from './service';
-export * from './widget'; 
+export { ChatManager } from './widget';

@@ -10,21 +10,21 @@ import {
   JupyterFrontEndPlugin
 } from '@jupyterlab/application';
 
-import { ICommandPalette, WidgetTracker } from '@jupyterlab/apputils';
+import { ICommandPalette } from '@jupyterlab/apputils';
 
 import { INotebookTracker } from '@jupyterlab/notebook';
 
 import { ISettingRegistry } from '@jupyterlab/settingregistry';
 
 import {
-  ChatWidget,
-  ChatService,
   CellManager,
-  OpenAIProvider,
+  ChatManager,
+  ChatService,
   ClaudeProvider,
-  LocalProvider,
   ICellManager,
-  ILLMProvider
+  ILLMProvider,
+  LocalProvider,
+  OpenAIProvider
 } from '@jupyterlab/chat';
 
 import { commandIDs } from './commands';
@@ -50,20 +50,15 @@ const plugin: JupyterFrontEndPlugin<void> = {
     // Create services
     let llmProvider: ILLMProvider;
     const cellManager: ICellManager = new CellManager(notebookTracker);
-    
-    // Widget tracker
-    const chatTracker = new WidgetTracker<ChatWidget>({
-      namespace: 'chat'
-    });
 
     // Settings handling
     let settings: ISettingRegistry.ISettings;
-    
+
     const updateProvider = () => {
       if (!settings) return;
-      
+
       const provider = settings.get('provider').composite as string;
-      
+
       switch (provider) {
         case 'openai':
           const openaiKey = settings.get('openaiApiKey').composite as string;
@@ -71,29 +66,29 @@ const plugin: JupyterFrontEndPlugin<void> = {
           llmProvider = new OpenAIProvider(openaiKey);
           llmProvider.setModel(openaiModel);
           break;
-          
+
         case 'claude':
           const claudeKey = settings.get('claudeApiKey').composite as string;
           const claudeModel = settings.get('claudeModel').composite as string;
           llmProvider = new ClaudeProvider(claudeKey);
           llmProvider.setModel(claudeModel);
           break;
-          
+
         case 'local':
           const localUrl = settings.get('localUrl').composite as string;
           const localModel = settings.get('localModel').composite as string;
           llmProvider = new LocalProvider(localUrl);
           llmProvider.setModel(localModel);
           break;
-          
+
         default:
           llmProvider = new OpenAIProvider();
       }
-      
+
       // Update existing chat services
-      chatTracker.forEach(widget => {
-        widget.chatService.setLLMProvider(llmProvider);
-      });
+      if (globalChatService) {
+        globalChatService.setLLMProvider(llmProvider);
+      }
     };
 
     // Load settings
@@ -102,7 +97,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
       .then(loadedSettings => {
         settings = loadedSettings;
         updateProvider();
-        
+
         // Listen for settings changes
         settings.changed.connect(() => {
           updateProvider();
@@ -114,65 +109,55 @@ const plugin: JupyterFrontEndPlugin<void> = {
         llmProvider = new OpenAIProvider();
       });
 
-    // Create chat widget factory
-    const createChatWidget = (): ChatWidget => {
-      const chatService = new ChatService(llmProvider, cellManager);
-      const widget = new ChatWidget(chatService);
-      
-      // Track the widget
-      chatTracker.add(widget);
-      
-      return widget;
+    // Global chat service (pure service, no widget)
+    let globalChatService: ChatService | null = null;
+    let globalChatManager: ChatManager | null = null;
+
+    const ensureChatService = (): {
+      chatService: ChatService;
+      chatManager: ChatManager;
+    } => {
+      if (!globalChatService || !globalChatManager) {
+        globalChatService = new ChatService(llmProvider, cellManager);
+        globalChatManager = new ChatManager(globalChatService);
+      }
+      return { chatService: globalChatService, chatManager: globalChatManager };
     };
 
     // Add commands
     app.commands.addCommand(commandIDs.open, {
       label: 'Open Chat',
-      caption: 'Open the chat panel',
+      caption: 'Open the floating chat dialog',
       execute: () => {
-        // Check if chat widget already exists
-        let widget = chatTracker.currentWidget;
-        
-        if (!widget || widget.isDisposed) {
-          widget = createChatWidget();
-          app.shell.add(widget, 'right', { rank: 200 });
-        }
-        
-        if (!widget.isAttached) {
-          app.shell.add(widget, 'right', { rank: 200 });
-        }
-        
-        app.shell.activateById(widget.id);
+        console.log('🔥 Open chat command executed');
+        const { chatManager } = ensureChatService();
+        chatManager.show();
       }
     });
 
     app.commands.addCommand(commandIDs.toggle, {
       label: 'Toggle Chat',
-      caption: 'Toggle the chat panel',
+      caption: 'Toggle the floating chat dialog',
       execute: () => {
-        const widget = chatTracker.currentWidget;
-        
-        if (widget && !widget.isDisposed) {
-          if (widget.isVisible) {
-            widget.hide();
-          } else {
-            widget.show();
-            app.shell.activateById(widget.id);
-          }
-        } else {
-          app.commands.execute(commandIDs.open);
-        }
+        console.log('🔥 Toggle chat command executed');
+        const { chatManager } = ensureChatService();
+        chatManager.toggle();
       }
+    });
+
+    // Add keyboard shortcut for quick access
+    app.commands.addKeyBinding({
+      command: commandIDs.toggle,
+      keys: ['Ctrl Shift Space'],
+      selector: 'body'
     });
 
     app.commands.addCommand(commandIDs.clear, {
       label: 'Clear Chat History',
       caption: 'Clear the chat conversation history',
       execute: () => {
-        const widget = chatTracker.currentWidget;
-        if (widget && !widget.isDisposed) {
-          widget.chatService.clearHistory();
-        }
+        const { chatService } = ensureChatService();
+        chatService.clearHistory();
       }
     });
 
@@ -182,7 +167,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
         command: commandIDs.open,
         category: 'Chat'
       });
-      
+
       palette.addItem({
         command: commandIDs.clear,
         category: 'Chat'
@@ -206,4 +191,4 @@ const plugin: JupyterFrontEndPlugin<void> = {
   }
 };
 
-export default plugin; 
+export default plugin;
