@@ -1,5 +1,11 @@
-import { IChatService, IChatMessage, ILLMProvider, ICellManager } from './tokens';
-import { Signal, ISignal } from '@lumino/signaling';
+import {
+  ICellManager,
+  IChatMessage,
+  IChatService,
+  ILLMProvider,
+  IMCPServersConfig
+} from './tokens';
+import { ISignal, Signal } from '@lumino/signaling';
 import { UUID } from '@lumino/coreutils';
 
 /**
@@ -16,7 +22,7 @@ export class ChatService implements IChatService {
     console.log('ChatService constructor called');
     console.log('LLM Provider:', llmProvider);
     console.log('Cell Manager:', cellManager);
-    
+
     this._llmProvider = llmProvider;
     this._cellManager = cellManager;
   }
@@ -33,7 +39,7 @@ export class ChatService implements IChatService {
    */
   async sendMessage(message: string): Promise<void> {
     console.log('🚀 ChatService.sendMessage called with:', message);
-    
+
     // Add user message
     const userMessage: IChatMessage = {
       id: UUID.uuid4(),
@@ -50,17 +56,20 @@ export class ChatService implements IChatService {
       // Get context from notebook cells
       const context = this._buildContext();
       console.log('Context built successfully:', context);
-      
+
       console.log('About to enhance message with context...');
       // Enhance message with context if it references cells
       const enhancedMessage = this._enhanceMessageWithContext(message, context);
       console.log('Message enhanced successfully:', enhancedMessage);
-      
+
       console.log('About to send to LLM...');
       // Send to LLM
-      const response = await this._llmProvider.sendMessage(enhancedMessage, context);
+      const response = await this._llmProvider.sendMessage(
+        enhancedMessage,
+        context
+      );
       console.log('LLM response received:', response);
-      
+
       // Process any cell operations in the response
       await this._processCellOperations(response);
 
@@ -74,7 +83,6 @@ export class ChatService implements IChatService {
 
       this._messages.push(assistantMessage);
       this._messageAdded.emit(assistantMessage);
-
     } catch (error) {
       console.error('Error in ChatService.sendMessage:', error);
       // Add error message
@@ -114,17 +122,17 @@ export class ChatService implements IChatService {
       console.log('About to call getAllCells...');
       const allCells = this._cellManager.getAllCells();
       console.log('getAllCells returned:', allCells);
-      
+
       console.log('About to call getCurrentCell...');
       const currentCell = this._cellManager.getCurrentCell();
       console.log('getCurrentCell returned:', currentCell);
-      
+
       const context = {
         allCells,
         currentCell,
         totalCells: allCells.length
       };
-      
+
       console.log('_buildContext returning:', context);
       return context;
     } catch (error) {
@@ -150,19 +158,26 @@ export class ChatService implements IChatService {
       if (this._mentionsCells(message)) {
         enhancedMessage += '\n\nCurrent notebook state:\n';
         enhancedMessage += `Total cells: ${context.totalCells || 0}\n`;
-        
+
         if (context.currentCell && context.currentCell.content !== undefined) {
           enhancedMessage += `Current cell (${context.currentCell.index}): ${context.currentCell.type}\n`;
           enhancedMessage += `Content: ${context.currentCell.content}\n`;
         }
 
         // Add cell contents if specifically requested
-        if (message.toLowerCase().includes('all cells') || message.toLowerCase().includes('show cells')) {
+        if (
+          message.toLowerCase().includes('all cells') ||
+          message.toLowerCase().includes('show cells')
+        ) {
           enhancedMessage += '\nAll cells:\n';
           if (Array.isArray(context.allCells)) {
             context.allCells.forEach((cell: any, index: number) => {
               if (cell && cell.content !== undefined) {
-                enhancedMessage += `Cell ${index} (${cell.type}): ${cell.content.substring(0, 200)}${cell.content.length > 200 ? '...' : ''}\n`;
+                enhancedMessage += `Cell ${index} (${
+                  cell.type
+                }): ${cell.content.substring(0, 200)}${
+                  cell.content.length > 200 ? '...' : ''
+                }\n`;
               }
             });
           }
@@ -171,12 +186,15 @@ export class ChatService implements IChatService {
         // Add instructions for cell operations
         if (this._requestsCellModification(message)) {
           enhancedMessage += '\n\n=== CELL OPERATION INSTRUCTIONS ===\n';
-          enhancedMessage += 'When you want to modify notebook cells, use these EXACT commands at the end of your response:\n';
-          enhancedMessage += '- To set cell content: SET_CELL <index> <content>\n';
+          enhancedMessage +=
+            'When you want to modify notebook cells, use these EXACT commands at the end of your response:\n';
+          enhancedMessage +=
+            '- To set cell content: SET_CELL <index> <content>\n';
           enhancedMessage += '- To add new cell: ADD_CELL <type> <content>\n';
           enhancedMessage += '- To execute cell: EXECUTE_CELL <index>\n';
           enhancedMessage += '- To delete cell: DELETE_CELL <index>\n';
-          enhancedMessage += 'Example: SET_CELL 1 def is_palindrome(s): return s == s[::-1]\n';
+          enhancedMessage +=
+            'Example: SET_CELL 1 def is_palindrome(s): return s == s[::-1]\n';
         }
       }
 
@@ -191,7 +209,15 @@ export class ChatService implements IChatService {
    * Check if message mentions cells
    */
   private _mentionsCells(message: string): boolean {
-    const cellMentions = ['cell', 'code', 'execute', 'run', 'insert', 'delete', 'modify'];
+    const cellMentions = [
+      'cell',
+      'code',
+      'execute',
+      'run',
+      'insert',
+      'delete',
+      'modify'
+    ];
     const lowerMessage = message.toLowerCase();
     return cellMentions.some(mention => lowerMessage.includes(mention));
   }
@@ -200,13 +226,25 @@ export class ChatService implements IChatService {
    * Check if message requests cell modification
    */
   private _requestsCellModification(message: string): boolean {
-    const modificationKeywords = ['add', 'create', 'insert', 'modify', 'change', 'set', 'update', 'delete', 'remove', 'write', 'put'];
+    const modificationKeywords = [
+      'add',
+      'create',
+      'insert',
+      'modify',
+      'change',
+      'set',
+      'update',
+      'delete',
+      'remove',
+      'write',
+      'put'
+    ];
     const cellKeywords = ['cell', 'code'];
     const lowerMessage = message.toLowerCase();
-    
-    return modificationKeywords.some(mod => 
-      cellKeywords.some(cell => 
-        lowerMessage.includes(mod) && lowerMessage.includes(cell)
+
+    return modificationKeywords.some(mod =>
+      cellKeywords.some(
+        cell => lowerMessage.includes(mod) && lowerMessage.includes(cell)
       )
     );
   }
@@ -217,7 +255,7 @@ export class ChatService implements IChatService {
   private async _processCellOperations(response: string): Promise<void> {
     // Look for cell operation commands in the response
     const operations = this._extractCellOperations(response);
-    
+
     for (const operation of operations) {
       try {
         await this._executeCellOperation(operation);
@@ -233,13 +271,13 @@ export class ChatService implements IChatService {
   private _extractCellOperations(response: string): any[] {
     const operations: any[] = [];
     console.log('🔍 Extracting cell operations from response:', response);
-    
+
     // Look for our specific command patterns:
     // - SET_CELL <index> <content>
     // - ADD_CELL <type> <content>
     // - EXECUTE_CELL <index>
     // - DELETE_CELL <index>
-    
+
     const patterns = [
       /SET_CELL\s+(\d+)\s+(.+)/gi,
       /ADD_CELL\s+(code|markdown)\s+(.+)/gi,
@@ -267,7 +305,7 @@ export class ChatService implements IChatService {
    */
   private _parseOperation(match: RegExpExecArray): any {
     const fullMatch = match[0].toUpperCase();
-    
+
     if (fullMatch.startsWith('SET_CELL')) {
       return {
         type: 'modify',
@@ -291,7 +329,7 @@ export class ChatService implements IChatService {
         cellIndex: parseInt(match[1])
       };
     }
-    
+
     return null;
   }
 
@@ -309,7 +347,10 @@ export class ChatService implements IChatService {
         this._cellManager.addCell(operation.content, operation.cellType);
         break;
       case 'modify':
-        this._cellManager.setCellContent(operation.cellIndex, operation.content);
+        this._cellManager.setCellContent(
+          operation.cellIndex,
+          operation.content
+        );
         break;
       case 'delete':
         this._cellManager.deleteCell(operation.cellIndex);
@@ -345,9 +386,29 @@ export class ChatService implements IChatService {
     if (this._isDisposed) {
       return;
     }
-    
+
     this._isDisposed = true;
     this._messages = [];
     Signal.clearData(this);
   }
-} 
+
+  /**
+   * Configure MCP servers for the LLM provider
+   */
+  async setMCPServers(mcpServers: IMCPServersConfig): Promise<void> {
+    if (this._llmProvider.setMCPServers) {
+      console.log('🔧 Configuring MCP servers:', Object.keys(mcpServers));
+      await this._llmProvider.setMCPServers(mcpServers);
+      console.log('✅ MCP servers configured successfully');
+    } else {
+      console.log('⚠️ LLM provider does not support MCP servers');
+    }
+  }
+
+  /**
+   * Get number of active MCP servers
+   */
+  getMCPServerCount(): number {
+    return this._llmProvider.getMCPServerCount?.() || 0;
+  }
+}

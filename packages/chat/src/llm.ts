@@ -1,4 +1,4 @@
-import { ILLMProvider } from './tokens';
+import { ILLMProvider, IMCPServersConfig } from './tokens';
 
 /**
  * Base LLM Provider implementation
@@ -16,124 +16,81 @@ export abstract class BaseLLMProvider implements ILLMProvider {
   getCurrentModel(): string {
     return this._currentModel;
   }
+
+  async setMCPServers?(mcpServers: IMCPServersConfig): Promise<void> {
+    // Default implementation does nothing
+  }
+
+  getMCPServerCount?(): number {
+    return 0;
+  }
 }
 
 /**
- * OpenAI provider implementation
+ * OpenAI provider implementation - ALL requests go through server-side API
  */
 export class OpenAIProvider extends BaseLLMProvider {
-  private _apiKey: string = '';
-  private _baseUrl: string = 'https://api.openai.com/v1';
+  private mcpServers: IMCPServersConfig = {};
 
-  constructor(apiKey?: string) {
+  constructor(apiKey: string) {
     super();
-    if (apiKey) {
-      this._apiKey = apiKey;
-    }
-    this._currentModel = 'gpt-3.5-turbo';
+    // API key not stored - read from server-side settings
   }
 
-  setApiKey(apiKey: string): void {
-    this._apiKey = apiKey;
+  async setMCPServers(mcpServers: IMCPServersConfig): Promise<void> {
+    console.log('🔧 Setting MCP servers:', Object.keys(mcpServers));
+    this.mcpServers = mcpServers;
+  }
+
+  getMCPServerCount(): number {
+    return Object.keys(this.mcpServers).length;
   }
 
   async sendMessage(message: string, context?: any): Promise<string> {
-    console.log('🔥 OpenAI sendMessage called with message:', message);
-    console.log('🔥 OpenAI API key exists:', !!this._apiKey);
-
-    if (!this._apiKey) {
-      console.log('🔥 No API key, returning fallback message');
-      return (
-        "I'm a JupyterLab assistant, but I need an OpenAI API key to be configured to provide intelligent responses. You can set this in the settings. For now, I can confirm that I received your message: " +
-        message
-      );
-    }
-
     try {
-      const response = await fetch(`${this._baseUrl}/chat/completions`, {
+      // Get XSRF token from page - try multiple methods
+      const xsrfToken =
+        document.querySelector('meta[name="_xsrf"]')?.getAttribute('content') ||
+        (document.cookie.match(/_xsrf=([^;]+)/) || [])[1] ||
+        (document.cookie.match(/xsrf=([^;]+)/) || [])[1] ||
+        '';
+
+      console.log('🔑 XSRF token found:', xsrfToken ? 'YES' : 'NO');
+      console.log(
+        '🚀 Sending to server extension with MCP servers:',
+        Object.keys(this.mcpServers)
+      );
+
+      // ALL requests go through server-side API - NO API keys in browser!
+      const response = await fetch('/api/chat/openai', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this._apiKey}`
+          'X-XSRFToken': xsrfToken,
+          'X-Requested-With': 'XMLHttpRequest'
         },
         body: JSON.stringify({
-          model: this._currentModel,
-          messages: [
-            {
-              role: 'system',
-              content: `You are a helpful assistant integrated into JupyterLab. You can help with code, analysis, and notebook manipulation. When you need to interact with cells, you can reference them by index (e.g., "cell 0", "cell 1").
-
-IMPORTANT: When a user asks for a plan, task breakdown, or steps to accomplish something, format your response using cards. Each card should follow this exact format:
-[CARD:Title|Description]
-
-For example:
-[CARD:Research the topic|Gather information about the subject from reliable sources]
-[CARD:Create outline|Structure the main points and subtopics]
-[CARD:Write first draft|Begin writing the content based on the outline]
-
-For regular questions that don't require planning, respond normally.`
-            },
-            {
-              role: 'user',
-              content: message
-            }
-          ],
-          max_tokens: 2000
+          message: message,
+          model: this._currentModel || 'gpt-4o-mini',
+          mcpServers: this.mcpServers,
+          context: context
         })
       });
 
       if (!response.ok) {
-        throw new Error(
-          `OpenAI API error: ${response.status} ${response.statusText}`
-        );
+        throw new Error(`Server error: ${response.statusText}`);
       }
 
       const data = await response.json();
-
-      // Much more defensive handling
-      if (!data) {
-        throw new Error('OpenAI API returned null/undefined response');
-      }
-
-      if (!data.choices) {
-        throw new Error('OpenAI API response missing choices array');
-      }
-
-      if (!Array.isArray(data.choices)) {
-        throw new Error('OpenAI API choices is not an array');
-      }
-
-      if (data.choices.length === 0) {
-        throw new Error('OpenAI API returned empty choices array');
-      }
-
-      const choice = data.choices[0];
-      if (!choice) {
-        throw new Error('OpenAI API first choice is null/undefined');
-      }
-
-      if (!choice.message) {
-        throw new Error('OpenAI API choice missing message');
-      }
-
-      if (
-        choice.message.content === undefined ||
-        choice.message.content === null
-      ) {
-        throw new Error('OpenAI API message content is null/undefined');
-      }
-
-      return String(choice.message.content || '');
+      return data.response || 'No response received';
     } catch (error) {
-      if (error.message && error.message.includes('OpenAI API')) {
-        throw error; // Re-throw our custom errors
-      }
-      throw new Error(`OpenAI API request failed: ${error.message}`);
+      console.error('Error in OpenAI provider:', error);
+      throw error;
     }
   }
 
   async getModels(): Promise<string[]> {
-    return ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo-preview'];
+    return ['gpt-4o', 'gpt-4o-mini', 'o1-preview', 'o1-mini'];
   }
 }
 

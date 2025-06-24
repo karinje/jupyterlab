@@ -4,17 +4,39 @@ import { IDisposable } from '@lumino/disposable';
 /**
  * The chat service token.
  */
-export const IChatService = new Token<IChatService>('@jupyterlab/chat:IChatService');
+export const IChatService = new Token<IChatService>(
+  '@jupyterlab/chat:IChatService'
+);
 
 /**
  * The LLM provider service token.
  */
-export const ILLMProvider = new Token<ILLMProvider>('@jupyterlab/chat:ILLMProvider');
+export const ILLMProvider = new Token<ILLMProvider>(
+  '@jupyterlab/chat:ILLMProvider'
+);
 
 /**
  * The cell manager service token.
  */
-export const ICellManager = new Token<ICellManager>('@jupyterlab/chat:ICellManager');
+export const ICellManager = new Token<ICellManager>(
+  '@jupyterlab/chat:ICellManager'
+);
+
+/**
+ * MCP Server configuration for stdio transport
+ */
+export interface IMCPServerConfig {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+/**
+ * Collection of MCP server configurations
+ */
+export interface IMCPServersConfig {
+  [serverName: string]: IMCPServerConfig;
+}
 
 /**
  * Interface for LLM providers
@@ -39,6 +61,16 @@ export interface ILLMProvider {
    * Get the current model
    */
   getCurrentModel(): string;
+
+  /**
+   * Set MCP servers (optional)
+   */
+  setMCPServers?(mcpServers: IMCPServersConfig): Promise<void>;
+
+  /**
+   * Get number of active MCP servers (optional)
+   */
+  getMCPServerCount?(): number;
 }
 
 /**
@@ -58,7 +90,11 @@ export interface ICellManager {
   /**
    * Insert a new cell at the specified index
    */
-  insertCell(cellIndex: number, content: string, cellType: 'code' | 'markdown'): void;
+  insertCell(
+    cellIndex: number,
+    content: string,
+    cellType: 'code' | 'markdown'
+  ): void;
 
   /**
    * Execute a specific cell
@@ -135,4 +171,14 @@ export interface IChatService extends IDisposable {
    * Get current LLM provider
    */
   getLLMProvider(): ILLMProvider;
-} 
+
+  /**
+   * Configure MCP servers
+   */
+  setMCPServers(mcpServers: IMCPServersConfig): Promise<void>;
+
+  /**
+   * Get number of active MCP servers
+   */
+  getMCPServerCount(): number;
+}

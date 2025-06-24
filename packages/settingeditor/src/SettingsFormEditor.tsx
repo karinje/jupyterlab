@@ -107,11 +107,16 @@ export class SettingsFormEditor extends React.Component<
   SettingsFormEditor.IProps,
   SettingsFormEditor.IState
 > {
+  private _instanceId: string;
+
   constructor(props: SettingsFormEditor.IProps) {
     super(props);
     const { settings } = props;
     settings.changed.connect(this._syncFormDataWithSettings);
     this._formData = settings.composite as ReadonlyJSONObject;
+    this._instanceId = `${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
     this.state = {
       isModified: settings.isModified,
       uiSchema: {},
@@ -228,7 +233,7 @@ export class SettingsFormEditor extends React.Component<
           fields={this.props.renderers[this.props.settings.id]}
           formContext={this.state.formContext}
           liveValidate
-          idPrefix={`jp-SettingsEditor-${this.props.settings.id}`}
+          idPrefix={`jp-SettingsEditor-${this._instanceId}`}
           onChange={this._onChange}
           translator={this.props.translator}
           experimental_defaultFormStateBehavior={{

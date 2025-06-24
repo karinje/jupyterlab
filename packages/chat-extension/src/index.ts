@@ -54,7 +54,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
     // Settings handling
     let settings: ISettingRegistry.ISettings;
 
-    const updateProvider = () => {
+    const updateProvider = async () => {
       if (!settings) return;
 
       const provider = settings.get('provider').composite as string;
@@ -63,7 +63,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
         case 'openai':
           const openaiKey = settings.get('openaiApiKey').composite as string;
           const openaiModel = settings.get('openaiModel').composite as string;
-          llmProvider = new OpenAIProvider(openaiKey);
+          llmProvider = new OpenAIProvider(openaiKey || '');
           llmProvider.setModel(openaiModel);
           break;
 
@@ -82,7 +82,26 @@ const plugin: JupyterFrontEndPlugin<void> = {
           break;
 
         default:
-          llmProvider = new OpenAIProvider();
+          llmProvider = new OpenAIProvider('');
+      }
+
+      // Configure MCP servers if available
+      const mcpServers = settings.get('mcpServers').composite as any;
+      if (mcpServers && Object.keys(mcpServers).length > 0) {
+        console.log(
+          '🔧 Configuring MCP servers from settings:',
+          Object.keys(mcpServers)
+        );
+
+        // If we have a chat service, configure MCP servers
+        if (globalChatService) {
+          try {
+            await globalChatService.setMCPServers(mcpServers);
+            console.log('✅ MCP servers configured for existing chat service');
+          } catch (error) {
+            console.error('❌ Failed to configure MCP servers:', error);
+          }
+        }
       }
 
       // Update existing chat services
@@ -100,26 +119,47 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
         // Listen for settings changes
         settings.changed.connect(() => {
-          updateProvider();
+          updateProvider().catch(error => {
+            console.error(
+              'Failed to update provider after settings change:',
+              error
+            );
+          });
         });
       })
       .catch(reason => {
         console.error('Failed to load settings for chat extension:', reason);
         // Fallback to default OpenAI provider
-        llmProvider = new OpenAIProvider();
+        llmProvider = new OpenAIProvider('');
       });
 
     // Global chat service (pure service, no widget)
     let globalChatService: ChatService | null = null;
     let globalChatManager: ChatManager | null = null;
 
-    const ensureChatService = (): {
+    const ensureChatService = async (): Promise<{
       chatService: ChatService;
       chatManager: ChatManager;
-    } => {
+    }> => {
       if (!globalChatService || !globalChatManager) {
         globalChatService = new ChatService(llmProvider, cellManager);
         globalChatManager = new ChatManager(globalChatService);
+
+        // Configure MCP servers for new chat service
+        if (settings) {
+          const mcpServers = settings.get('mcpServers').composite as any;
+          if (mcpServers && Object.keys(mcpServers).length > 0) {
+            try {
+              await globalChatService.setMCPServers(mcpServers);
+              console.log('✅ MCP servers configured for new chat service');
+            } catch (error) {
+              console.error(
+                '❌ Failed to configure MCP servers for new chat service:',
+                error
+              );
+            }
+          }
+        }
       }
       return { chatService: globalChatService, chatManager: globalChatManager };
     };
@@ -128,9 +168,9 @@ const plugin: JupyterFrontEndPlugin<void> = {
     app.commands.addCommand(commandIDs.open, {
       label: 'Open Chat',
       caption: 'Open the floating chat dialog',
-      execute: () => {
+      execute: async () => {
         console.log('🔥 Open chat command executed');
-        const { chatManager } = ensureChatService();
+        const { chatManager } = await ensureChatService();
         chatManager.show();
       }
     });
@@ -138,9 +178,9 @@ const plugin: JupyterFrontEndPlugin<void> = {
     app.commands.addCommand(commandIDs.toggle, {
       label: 'Toggle Chat',
       caption: 'Toggle the floating chat dialog',
-      execute: () => {
+      execute: async () => {
         console.log('🔥 Toggle chat command executed');
-        const { chatManager } = ensureChatService();
+        const { chatManager } = await ensureChatService();
         chatManager.toggle();
       }
     });
@@ -155,8 +195,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
     app.commands.addCommand(commandIDs.clear, {
       label: 'Clear Chat History',
       caption: 'Clear the chat conversation history',
-      execute: () => {
-        const { chatService } = ensureChatService();
+      execute: async () => {
+        const { chatService } = await ensureChatService();
         chatService.clearHistory();
       }
     });

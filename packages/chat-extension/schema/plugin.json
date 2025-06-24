@@ -18,10 +18,10 @@
     },
     "openaiModel": {
       "title": "OpenAI Model",
-      "description": "OpenAI model to use",
+      "description": "OpenAI model to use (only 4o series and o1 models support MCP tools)",
       "type": "string",
-      "enum": ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"],
-      "default": "gpt-3.5-turbo"
+      "enum": ["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"],
+      "default": "gpt-4o-mini"
     },
     "claudeApiKey": {
       "title": "Claude API Key",
@@ -33,7 +33,11 @@
       "title": "Claude Model",
       "description": "Claude model to use",
       "type": "string",
-      "enum": ["claude-3-sonnet-20240229", "claude-3-opus-20240229", "claude-3-haiku-20240307"],
+      "enum": [
+        "claude-3-sonnet-20240229",
+        "claude-3-opus-20240229",
+        "claude-3-haiku-20240307"
+      ],
       "default": "claude-3-sonnet-20240229"
     },
     "localUrl": {
@@ -61,7 +65,45 @@
       "minimum": 100,
       "maximum": 4000,
       "default": 2000
+    },
+    "mcpServers": {
+      "title": "MCP Servers",
+      "description": "Configuration for Model Context Protocol servers (stdio transport like Cursor/Claude Desktop)",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Command to execute for the MCP server (e.g., 'npx', 'python')"
+          },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Arguments for the MCP server command"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Environment variables for the MCP server"
+          }
+        },
+        "required": ["command", "args"]
+      },
+      "default": {
+        "snowflake": {
+          "command": "npx",
+          "args": ["@modelcontextprotocol/server-snowflake"],
+          "env": {
+            "SNOWFLAKE_USER": "your_username",
+            "SNOWFLAKE_PASSWORD": "your_password",
+            "SNOWFLAKE_ACCOUNT": "your_account",
+            "SNOWFLAKE_DATABASE": "your_database",
+            "SNOWFLAKE_WAREHOUSE": "your_warehouse"
+          }
+        }
+      }
     }
   },
   "additionalProperties": false
-} 
+}
