@@ -158,3 +158,11 @@ untitled*.txt
 
 # pixi environments
 .pixi
+
+# MCP service references (separate git repositories)
+mcp-snowflake-service/
+
+# Development and log files
+jlab.log
+jlab.debug.log
+.jupyter_ystore.db
