@@ -18,7 +18,7 @@ async def test_agent_tools():
 
     # Configuration
     server_url = "http://127.0.0.1:8890"
-    token = "d0e4b88278aa22aef04a73accbe7deafd8484a042a5830a2"  # Current token from dev mode JupyterLab
+    token = "2534629f0a1bafdd8572428dc0a008d3ad6e9be5526c217d"  # Fresh restart with JupyterAgent integration
     notebook_path = "Untitled.ipynb"
 
     # Create agent

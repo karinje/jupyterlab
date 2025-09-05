@@ -216,7 +216,7 @@ async def test_multiple_cell_targeting():
     server_url = "http://127.0.0.1:8890"
     
     # Use current values from the fresh server restart
-    token = "d0e4b88278aa22aef04a73accbe7deafd8484a042a5830a2"  # New token from dev mode restart
+    token = "819ba7a76968409c277f4aac4de5395fb5c2736c8485b6a2"  # Fresh restart with rebuilt chat extensions
     kernel_id = "NEED_TO_CREATE"  # Will create new kernel
     print(f"✅ Token: {token[:16]}...")
     
@@ -525,7 +525,7 @@ print("✨ Plot completed!")
                     else:
                         print(f"   ❌ FAILED: CELL C has no outputs")
                     break
-
+    
     print("\n" + "=" * 60)
     print("✅ CELL TARGETING TESTS COMPLETED")
     print("=" * 60)

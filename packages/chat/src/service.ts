@@ -183,19 +183,7 @@ export class ChatService implements IChatService {
           }
         }
 
-        // Add instructions for cell operations
-        if (this._requestsCellModification(message)) {
-          enhancedMessage += '\n\n=== CELL OPERATION INSTRUCTIONS ===\n';
-          enhancedMessage +=
-            'When you want to modify notebook cells, use these EXACT commands at the end of your response:\n';
-          enhancedMessage +=
-            '- To set cell content: SET_CELL <index> <content>\n';
-          enhancedMessage += '- To add new cell: ADD_CELL <type> <content>\n';
-          enhancedMessage += '- To execute cell: EXECUTE_CELL <index>\n';
-          enhancedMessage += '- To delete cell: DELETE_CELL <index>\n';
-          enhancedMessage +=
-            'Example: SET_CELL 1 def is_palindrome(s): return s == s[::-1]\n';
-        }
+        // Pattern matching removed - backend now handles all notebook operations via function tools
       }
 
       return enhancedMessage;
@@ -222,141 +210,20 @@ export class ChatService implements IChatService {
     return cellMentions.some(mention => lowerMessage.includes(mention));
   }
 
-  /**
-   * Check if message requests cell modification
-   */
-  private _requestsCellModification(message: string): boolean {
-    const modificationKeywords = [
-      'add',
-      'create',
-      'insert',
-      'modify',
-      'change',
-      'set',
-      'update',
-      'delete',
-      'remove',
-      'write',
-      'put'
-    ];
-    const cellKeywords = ['cell', 'code'];
-    const lowerMessage = message.toLowerCase();
-
-    return modificationKeywords.some(mod =>
-      cellKeywords.some(
-        cell => lowerMessage.includes(mod) && lowerMessage.includes(cell)
-      )
-    );
-  }
+  // Cell modification detection removed - backend handles all operations via function tools
 
   /**
    * Process cell operations from LLM response
+   * NOTE: Cell operations now handled by backend function tools - no frontend processing needed
    */
   private async _processCellOperations(response: string): Promise<void> {
-    // Look for cell operation commands in the response
-    const operations = this._extractCellOperations(response);
-
-    for (const operation of operations) {
-      try {
-        await this._executeCellOperation(operation);
-      } catch (error) {
-        console.warn('Failed to execute cell operation:', operation, error);
-      }
-    }
+    // Cell operations now handled by backend function tools - no processing needed
+    return;
   }
 
-  /**
-   * Extract cell operations from LLM response
-   */
-  private _extractCellOperations(response: string): any[] {
-    const operations: any[] = [];
-    console.log('🔍 Extracting cell operations from response:', response);
+  // Pattern matching methods removed - backend handles all operations via function tools
 
-    // Look for our specific command patterns:
-    // - SET_CELL <index> <content>
-    // - ADD_CELL <type> <content>
-    // - EXECUTE_CELL <index>
-    // - DELETE_CELL <index>
-
-    const patterns = [
-      /SET_CELL\s+(\d+)\s+(.+)/gi,
-      /ADD_CELL\s+(code|markdown)\s+(.+)/gi,
-      /EXECUTE_CELL\s+(\d+)/gi,
-      /DELETE_CELL\s+(\d+)/gi
-    ];
-
-    patterns.forEach(pattern => {
-      let match;
-      while ((match = pattern.exec(response)) !== null) {
-        const operation = this._parseOperation(match);
-        if (operation) {
-          console.log('📝 Found operation:', operation);
-          operations.push(operation);
-        }
-      }
-    });
-
-    console.log('🎯 Total operations found:', operations.length);
-    return operations;
-  }
-
-  /**
-   * Parse operation from regex match
-   */
-  private _parseOperation(match: RegExpExecArray): any {
-    const fullMatch = match[0].toUpperCase();
-
-    if (fullMatch.startsWith('SET_CELL')) {
-      return {
-        type: 'modify',
-        cellIndex: parseInt(match[1]),
-        content: match[2].trim()
-      };
-    } else if (fullMatch.startsWith('ADD_CELL')) {
-      return {
-        type: 'insert',
-        cellType: match[1] as 'code' | 'markdown',
-        content: match[2].trim()
-      };
-    } else if (fullMatch.startsWith('EXECUTE_CELL')) {
-      return {
-        type: 'execute',
-        cellIndex: parseInt(match[1])
-      };
-    } else if (fullMatch.startsWith('DELETE_CELL')) {
-      return {
-        type: 'delete',
-        cellIndex: parseInt(match[1])
-      };
-    }
-
-    return null;
-  }
-
-  /**
-   * Execute a cell operation
-   */
-  private async _executeCellOperation(operation: any): Promise<void> {
-    if (!operation) return;
-
-    switch (operation.type) {
-      case 'execute':
-        await this._cellManager.executeCell(operation.cellIndex);
-        break;
-      case 'insert':
-        this._cellManager.addCell(operation.content, operation.cellType);
-        break;
-      case 'modify':
-        this._cellManager.setCellContent(
-          operation.cellIndex,
-          operation.content
-        );
-        break;
-      case 'delete':
-        this._cellManager.deleteCell(operation.cellIndex);
-        break;
-    }
-  }
+  // All pattern matching methods removed - backend handles operations via function tools
 
   /**
    * Set LLM provider

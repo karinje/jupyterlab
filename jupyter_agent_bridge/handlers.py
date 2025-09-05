@@ -112,6 +112,7 @@ class UpdateCellOutputsHandler(APIHandler):
                                 f"Failed to save notebook: {save_resp.status} - {error_text}"
                             )
 
+
             self.finish({"success": True, "message": "Outputs updated"})
 
         except Exception as e:
