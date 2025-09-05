@@ -166,3 +166,9 @@ mcp-snowflake-service/
 jlab.log
 jlab.debug.log
 .jupyter_ystore.db
+
+# NPM package tarballs
+*.tgz
+
+# JupyterLab build debug logs
+/var/folders/*/jupyterlab-debug-*.log

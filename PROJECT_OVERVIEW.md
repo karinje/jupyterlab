@@ -214,6 +214,13 @@ Contents API → Persistent notebook state
 3. **Production Deployment** - Scaling and monitoring
 4. **Advanced Features** - Notebook templates, agent memory, etc.
 
+### ⚠️ **PENDING ISSUES**
+1. **JupyterLab Production Build** - [See JUPYTERLAB_BUILD_ISSUES.md](./JUPYTERLAB_BUILD_ISSUES.md)
+   - **Issue**: Production build fails with local workspace dependencies
+   - **Current Solution**: Use dev flags (`--dev-mode --extensions-in-dev-mode`)
+   - **Future Solution**: Private npm registry or single extension approach
+   - **Priority**: LOW (only needed for production deployment)
+
 ---
 
 ## 🚀 **Ready for LLM Integration**
