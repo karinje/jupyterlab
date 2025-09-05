@@ -1,10 +1,8 @@
-"""REST handlers that will wrap Collaboration API – WIP placeholder."""
+"""REST handlers for JupyterAgent functionality."""
 
-import uuid
 import json
 from tornado import web
 from jupyter_server.base.handlers import APIHandler
-from pycrdt import Doc, Map, Array, Text
 
 
 class NotImplementedHandler(APIHandler):
@@ -15,31 +13,7 @@ class NotImplementedHandler(APIHandler):
     post = get
 
 
-def build_insert_cell_update(index: int = 0, cell_type: str = "code", source: str = ""):
-    """Build a Y-update for inserting a new cell."""
-    ydoc = Doc()
-    cells = ydoc["cells"] = Array()
-
-    cell_map = {
-        "id": str(uuid.uuid4()),
-        "cell_type": cell_type,
-        "source": Text(source),
-        "metadata": Map({}),
-    }
-    if cell_type == "code":
-        cell_map.update(
-            {
-                "execution_count": None,
-                "outputs": Array(),
-            }
-        )
-
-    cell = Map(cell_map)
-
-    with ydoc.transaction():
-        cells.insert(index, cell)
-
-    return ydoc.get_update()
+# Utility functions removed - JupyterAgent uses its own implementation
 
 
 class UpdateCellOutputsHandler(APIHandler):

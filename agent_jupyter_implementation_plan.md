@@ -216,6 +216,15 @@ await agent.execute_and_capture("notebook.ipynb", "sum(x)", target_cell_id=resul
 - [x] **Error handling and recovery**
 - [x] **Test suite available** (`test_agent_tools.py`)
 
+### Phase 4: LLM Chat Integration ✅ COMPLETE
+- [x] **JupyterLab Chat Extension** (`packages/chat/` and `packages/chat-extension/`)
+- [x] **OpenAI Agents SDK Integration** with JupyterAgent tools
+- [x] **Tool Call Extraction** and conversation history saved to notebook metadata
+- [x] **MCP Server Support** (Model Context Protocol) for external data sources
+- [x] **Real-time UI Updates** via Y-document collaboration
+- [x] **Conversation Threading** with multiple threads per notebook
+- [x] **Frontend/Backend Separation** - Pure passthrough frontend, all LLM logic in backend
+
 ### Phase 4: Advanced Features 📋 PLANNED
 - [ ] Multi-notebook operations
 - [ ] Batch cell operations

@@ -10,7 +10,7 @@ import json
 import uuid
 import websockets
 from jupyter_agent_bridge.room_proxy import RoomProxy
-from jupyter_agent_bridge.handlers import build_insert_cell_update
+from jupyter_agent_bridge import build_insert_cell_update
 
 
 async def execute_code_and_get_outputs(

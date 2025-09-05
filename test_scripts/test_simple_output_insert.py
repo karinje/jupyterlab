@@ -5,7 +5,7 @@ Simple test: Insert cell then immediately insert outputs to verify the mechanism
 
 import asyncio
 from jupyter_agent_bridge.room_proxy import RoomProxy
-from jupyter_agent_bridge.handlers import (
+from jupyter_agent_bridge import (
     build_insert_cell_update,
     build_cell_outputs_update,
 )

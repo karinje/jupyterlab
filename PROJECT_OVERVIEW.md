@@ -7,13 +7,39 @@ Enable AI agents to interact with JupyterLab notebooks in real-time, providing s
 
 ## 🏗️ **Architecture Overview**
 
+### **Extension Architecture** 
+Following standard JupyterLab patterns, we have 4 components:
+
+#### **🔧 Python Server Extensions** (Backend only)
+1. **`jupyter_agent_bridge`** - Core agent tools and utilities
+   - `tools.py` - `JupyterAgent` class with LLM tools
+   - `room_proxy.py` - Y-document WebSocket helper
+   - **Type**: Jupyter Server extension (Python only)
+
+2. **`jupyter_agent_ydoc`** - Y-document manipulation endpoints  
+   - `handlers.py` - REST API for direct Y-document operations
+   - **Type**: Jupyter Server extension (Python only)
+
+#### **🎨 JupyterLab Frontend Extension** (Frontend + Backend)
+3. **`@jupyterlab/chat`** - Chat components library
+   - TypeScript widgets, services, providers
+   - Python backend (`jupyterlab_chat/`) with OpenAI Agents SDK integration
+   - **Type**: Library package (not loaded directly by JupyterLab)
+
+4. **`@jupyterlab/chat-extension`** - The actual extension
+   - JupyterLab plugin registration and activation
+   - Settings, commands, keybindings, UI integration
+   - **Type**: JupyterLab extension (what users install)
+
+### **Data Flow Architecture**
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          LLM AGENT LAYER                            │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐     │
-│  │   LangGraph     │  │      MCP        │  │   Custom Agent  │     │
-│  │   Agent         │  │   Integration   │  │     Tools       │     │
-│  │  (PLANNED)      │  │  (PLANNED)      │  │   (WORKING)     │     │
+│  │   OpenAI Chat   │  │      MCP        │  │   Custom Agent  │     │
+│  │   Integration   │  │   Snowflake     │  │     Tools       │     │
+│  │   ✅ WORKING    │  │   ✅ WORKING    │  │   ✅ WORKING    │     │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘     │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
@@ -35,7 +61,7 @@ Enable AI agents to interact with JupyterLab notebooks in real-time, providing s
 │                    JUPYTER BACKEND INTEGRATION                      │
 │                        ✅ COMPLETE                                  │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐     │
-│  │   RoomProxy     │  │  REST Handlers  │  │ Kernel WebSocket│     │
+│  │   RoomProxy     │  │  Y-Doc Handlers │  │ Kernel WebSocket│     │
 │  │ (Y-document)    │  │  (Cell CRUD)    │  │  (Execution)    │     │
 │  │   WORKING       │  │    WORKING      │  │    WORKING      │     │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘     │
@@ -48,6 +74,8 @@ Enable AI agents to interact with JupyterLab notebooks in real-time, providing s
 │  • Cells appear instantly without refresh                           │
 │  • Rich outputs (matplotlib, HTML, DataFrames)                     │
 │  • Cross-cell targeting support                                     │
+│  • UUID-based cell identification                                   │
+│  • Chat UI with conversation history                                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
