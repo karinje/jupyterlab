@@ -225,12 +225,14 @@ await agent.execute_and_capture("notebook.ipynb", "sum(x)", target_cell_id=resul
 - [x] **Conversation Threading** with multiple threads per notebook
 - [x] **Frontend/Backend Separation** - Pure passthrough frontend, all LLM logic in backend
 
-### Phase 4: Advanced Features 📋 PLANNED
-- [ ] Multi-notebook operations
-- [ ] Batch cell operations
-- [ ] Kernel management (restart, switch)
-- [ ] Progress WebSocket for real-time feedback
-- [ ] Frontend integration (optional)
+### Phase 5: LangGraph Data Analysis Agent 🚧 IN PROGRESS
+- [x] **Architecture Design**: LLM-driven decision making with LangGraph
+- [x] **Dynamic Planning**: Interactive plan creation with editable cards
+- [ ] **LangGraph Implementation**: Node-based workflow orchestration
+- [ ] **Multi-LLM Support**: Router for different models (GPT-4, Claude, Llama)
+- [ ] **Context Management**: Efficient notebook state tracking
+- [ ] **Status Updates**: Real-time progress streaming to chat UI
+- [ ] **Error Recovery**: Intelligent error handling and adaptation
 
 ---
 
@@ -248,13 +250,25 @@ jupyterlab/
 │   ├── __init__.py
 │   └── handlers.py                # Room management
 │
+├── packages/jupyter-agent/        # 🚧 NEW - LangGraph Agent (IN PROGRESS)
+│   ├── src/
+│   │   ├── agent/
+│   │   │   ├── graph.py          # LangGraph workflow definition
+│   │   │   ├── nodes.py          # Individual node implementations
+│   │   │   └── state.py          # State and schema definitions
+│   │   ├── context/
+│   │   │   └── notebook_state.py # Efficient state management
+│   │   └── llm/
+│   │       └── router.py         # Multi-LLM support
+│   └── tests/                    # Agent-specific tests
+│
 ├── test_scripts/                  # ✅ Test Suite
 │   ├── README.md                  # Test documentation
 │   ├── test_agent_tools.py        # 🔥 Main test suite
 │   ├── test_complete_flow.py      # End-to-end workflow
 │   └── [9 other test files]       # Component tests
 │
-├── mcp-snowflake-service/         # 🔄 PLANNED - MCP integration
+├── mcp-snowflake-service/         # ✅ MCP Snowflake integration
 ├── PROJECT_OVERVIEW.md            # ✅ Complete project overview
 └── agent_jupyter_implementation_plan.md  # ✅ This technical guide
 ```
@@ -410,3 +424,360 @@ print(f"Created cell {result['cell_id']} with {len(result['outputs'])} outputs")
 - Auto-discovery enables seamless agent operation
 
 This architecture has been **proven in production** with successful matplotlib plot generation, cross-cell targeting, and real-time synchronization.
+
+---
+
+## LangGraph Data Analysis Agent Architecture (NEW)
+
+### Overview
+The LangGraph agent provides intelligent, iterative data analysis capabilities with full LLM-driven decision making. Every action is determined by the LLM based on complete notebook context, user messages, and available tools.
+
+### Core Design Principles
+
+1. **Pure LLM-Driven**: No hardcoded logic - every decision made by LLM with full context
+2. **Dynamic Planning**: Plans created, modified, and executed based on LLM analysis
+3. **Iterative Learning**: Each step builds on previous results
+4. **User Interruption Friendly**: Seamlessly handles feedback at any point
+5. **Multi-LLM Support**: Easy switching between GPT-4, Claude, Llama, etc.
+
+### LangGraph Architecture
+
+```python
+# packages/jupyter-agent/src/agent/graph.py
+
+class DataAnalysisAgent:
+    """LangGraph-based agent for iterative data analysis"""
+    
+    def _build_graph(self) -> StateGraph:
+        workflow = StateGraph(AnalysisState)
+        
+        # Decision node - LLM analyzes and decides
+        workflow.add_node("analyze_and_decide", self.analyze_and_decide)
+        
+        # Action nodes - actual capabilities
+        workflow.add_node("create_plan", self.create_plan)
+        workflow.add_node("execute_code", self.execute_code)
+        workflow.add_node("query_snowflake", self.query_snowflake)
+        workflow.add_node("create_visualization", self.create_visualization)
+        workflow.add_node("handle_user_feedback", self.handle_user_feedback)
+        workflow.add_node("complete_analysis", self.complete_analysis)
+        
+        # LLM decides routing
+        workflow.add_conditional_edges(
+            "analyze_and_decide",
+            lambda state: state.next_action,  # Pure LLM decision
+            {
+                "create_plan": "create_plan",
+                "execute_code": "execute_code",
+                "query_snowflake": "query_snowflake",
+                "create_visualization": "create_visualization",
+                "handle_feedback": "handle_user_feedback",
+                "complete": "complete_analysis"
+            }
+        )
+        
+        # All actions return to analysis
+        for node in ["create_plan", "execute_code", "query_snowflake", 
+                     "create_visualization", "handle_user_feedback"]:
+            workflow.add_edge(node, "analyze_and_decide")
+        
+        workflow.set_entry_point("analyze_and_decide")
+        workflow.add_edge("complete_analysis", END)
+        
+        return workflow.compile()
+```
+
+### State Management
+
+```python
+# packages/jupyter-agent/src/agent/state.py
+
+class AnalysisState(TypedDict):
+    """Complete context for LLM decision-making"""
+    
+    # Core context
+    original_request: str
+    notebook_path: str
+    conversation_history: List[Dict[str, str]]  # All messages
+    
+    # Notebook state
+    notebook_cells: List[Dict[str, Any]]  # Complete cells with outputs
+    execution_history: List[Dict]  # All executions with results
+    
+    # Planning
+    plan: Optional[List[PlanStep]]  # Current plan (if any)
+    completed_steps: List[str]  # Which plan steps are done
+    
+    # LLM decisions
+    next_action: str  # What to do next
+    action_params: Dict[str, Any]  # Parameters for the action
+    reasoning: str  # Why this decision
+    
+    # External resources
+    available_data_sources: List[Dict]  # From MCP/Snowflake
+    
+    # Control
+    is_complete: bool
+```
+
+### LLM Decision Making
+
+The core `analyze_and_decide` node provides the LLM with complete context:
+
+```python
+async def analyze_and_decide(self, state: AnalysisState) -> AnalysisState:
+    """LLM analyzes everything and decides next action"""
+    
+    # Always get fresh notebook state
+    notebook = await self.notebook_state_manager.get_complete_notebook_state(
+        state.notebook_path
+    )
+    
+    # Build complete context for LLM
+    context = {
+        "user_request": state.original_request,
+        "conversation_history": state.conversation_history,
+        "notebook_state": notebook,  # All cells with outputs
+        "current_plan": state.plan,
+        "execution_history": state.execution_history,
+        "available_data_sources": state.available_data_sources,
+        "available_actions": [
+            "create_plan",      # Create analysis plan
+            "execute_code",     # Write and run code
+            "query_snowflake",  # Query external data
+            "create_visualization",  # Make charts
+            "handle_feedback",  # Process user input
+            "complete"          # Finish analysis
+        ]
+    }
+    
+    # LLM makes decision with structured output
+    decision = await self.llm.with_structured_output(Decision).ainvoke(
+        f"Analyze context and decide next action:\n{json.dumps(context)}"
+    )
+    
+    # Update state
+    state.next_action = decision.action
+    state.action_params = decision.params
+    state.reasoning = decision.reasoning
+    
+    # Send status to chat
+    await self.chat_handler.send_status(decision.status_message)
+    
+    return state
+```
+
+### Dynamic Planning with User Interaction
+
+When the LLM decides a plan is needed:
+
+```python
+async def create_plan(self, state: AnalysisState) -> AnalysisState:
+    """Create interactive plan with editable cards"""
+    
+    # LLM already created plan in analyze_and_decide
+    plan = state.plan
+    
+    # Display as editable cards in chat UI
+    await self.chat_handler.display_plan_cards([
+        {
+            "id": step.step_id,
+            "title": step.title,
+            "description": step.description,
+            "editable": True
+        }
+        for step in plan.steps
+    ])
+    
+    # User can now:
+    # - Edit cards directly in UI
+    # - Add/remove steps
+    # - Provide feedback in chat
+    # - Or just continue
+    
+    return state
+```
+
+### Status Updates and Transparency
+
+Every node sends real-time updates to the chat:
+
+```python
+# In analyze_and_decide
+await self.chat_handler.send_status("🔍 Analyzing notebook context...")
+
+# In execute_code  
+await self.chat_handler.send_status(f"💻 Running: {code[:50]}...")
+
+# In query_snowflake
+await self.chat_handler.send_status("🗄️ Querying Snowflake database...")
+
+# After execution
+await self.chat_handler.send_status("✅ Code executed successfully")
+```
+
+### Efficient Notebook State Management
+
+```python
+# packages/jupyter-agent/src/context/notebook_state.py
+
+class NotebookStateManager:
+    """Efficient notebook state retrieval"""
+    
+    async def get_complete_notebook_state(self, notebook_path: str) -> List[Dict]:
+        """Get all cells with intelligently summarized outputs"""
+        
+        # Single API call for entire notebook
+        notebook = await self.jupyter_api.get_notebook(notebook_path)
+        
+        # Summarize for LLM context
+        cells = []
+        for cell in notebook["cells"]:
+            cell_summary = {
+                "type": cell["cell_type"],
+                "source": cell["source"],
+                "execution_count": cell.get("execution_count"),
+                "outputs": self._summarize_outputs(cell.get("outputs", []))
+            }
+            cells.append(cell_summary)
+            
+        return cells
+    
+    def _summarize_outputs(self, outputs: List[Dict]) -> List[Dict]:
+        """Smart output summarization to avoid token explosion"""
+        
+        summarized = []
+        for output in outputs:
+            if "data" in output:
+                summary = {"type": "data"}
+                if "text/plain" in output["data"]:
+                    text = output["data"]["text/plain"]
+                    summary["text"] = text[:1000] if len(text) > 1000 else text
+                if "image/png" in output["data"]:
+                    summary["has_image"] = True
+                if "text/html" in output["data"]:
+                    summary["has_dataframe"] = True
+                summarized.append(summary)
+            elif "ename" in output:
+                summarized.append({
+                    "type": "error",
+                    "error": f"{output['ename']}: {output['evalue']}"
+                })
+                
+        return summarized
+```
+
+### Example Flow - Multi-Step Analysis
+
+```
+User: "Analyze customer churn patterns"
+
+→ analyze_and_decide
+  Context: Empty notebook
+  LLM decides: Need to create a plan
+  Action: create_plan
+  Status: "📋 Creating analysis plan..."
+
+→ create_plan
+  Plan displayed as editable cards:
+  1. Load customer data from Snowflake
+  2. Calculate churn metrics
+  3. Segment customers
+  4. Identify patterns
+  5. Create visualizations
+
+→ analyze_and_decide
+  Context: Plan exists, notebook empty
+  LLM decides: Execute step 1 - need data
+  Action: query_snowflake
+  Status: "🗄️ Loading customer data..."
+
+→ query_snowflake
+  Executes: SELECT * FROM customers
+  Creates: df DataFrame in notebook
+
+→ analyze_and_decide
+  Context: Data loaded, 10K rows
+  LLM decides: Explore data structure
+  Action: execute_code
+  Code: df.info(), df.describe()
+  Status: "🔍 Exploring data structure..."
+
+User interrupts: "Focus only on enterprise customers"
+
+→ analyze_and_decide
+  Context: All previous + user message
+  LLM decides: Filter data, adjust plan
+  Action: execute_code
+  Code: df_ent = df[df['segment'] == 'Enterprise']
+  Updates plan to focus on enterprise
+  Status: "📊 Filtering for enterprise customers..."
+
+[Continues iteratively...]
+```
+
+### Integration with Existing Tools
+
+The LangGraph agent uses the existing JupyterAgent tools:
+
+```python
+# In execute_code node
+result = await self.jupyter_agent.insert_code_and_execute(
+    state.notebook_path,
+    state.action_params["code"]
+)
+
+# In query_snowflake node  
+data = await self.mcp_snowflake.query(state.action_params["sql"])
+```
+
+### Testing Strategy
+
+1. **Unit Tests**: Each node tested independently
+2. **Integration Tests**: Full workflow scenarios
+3. **LLM Mock Tests**: Predictable responses for CI/CD
+4. **Real LLM Tests**: Actual model integration tests
+
+---
+
+## Updated Timeline
+
+### Phase 5: LangGraph Agent (Current - 4 weeks)
+- **Week 1**: Core LangGraph implementation
+  - State management
+  - Node implementations
+  - LLM integration with structured outputs
+  
+- **Week 2**: Interactive Planning
+  - Editable card UI integration
+  - Plan execution and modification
+  - User feedback handling
+  
+- **Week 3**: Multi-LLM Support
+  - Model router implementation
+  - Provider abstraction
+  - Cost/performance optimization
+  
+- **Week 4**: Production Readiness
+  - Comprehensive testing
+  - Error recovery patterns
+  - Performance optimization
+  - Documentation
+
+### Phase 6: Advanced Features (Future)
+- Multi-notebook orchestration
+- Agent memory and learning
+- Custom tool integration
+- Export and reporting
+
+---
+
+## Success Criteria
+
+1. **Full Context Awareness**: LLM makes all decisions with complete notebook state
+2. **Dynamic Adaptation**: Seamlessly handles user interruptions and plan changes
+3. **Transparency**: Users understand what agent is doing at each step
+4. **Reliability**: Graceful error handling and recovery
+5. **Performance**: Efficient state management (<100ms overhead per decision)
+
+This architecture provides a sophisticated, LLM-driven agent that can handle complex, iterative data analysis tasks while maintaining full transparency and user control.

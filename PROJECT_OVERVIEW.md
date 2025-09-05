@@ -3,11 +3,38 @@
 ## 🎯 **Project Vision**
 Enable AI agents to interact with JupyterLab notebooks in real-time, providing seamless code execution, rich output handling, and cross-cell targeting capabilities.
 
+## 🚀 **Quick Start**
+
+### **Development Mode Invocation**
+```bash
+jupyter lab --dev-mode --extensions-in-dev-mode --ServerApp.log_level=DEBUG --port=8890
+```
+
+**Flag Explanations**:
+- `--dev-mode` - Enables development mode with hot reloading
+- `--extensions-in-dev-mode` - Loads extensions from source directories (not built)
+- `--ServerApp.log_level=DEBUG` - Shows detailed logging for debugging
+- `--port=8890` - Uses custom port to avoid conflicts
+
+### **Git Checkin**
+```bash
+# Add all changes
+git add .
+
+# Commit with descriptive message (skip pre-commit hooks)
+git commit --no-verify -m "Your commit message here"
+
+# Push to remote
+git push
+```
+
+**Note**: Use `--no-verify` to skip pre-commit hooks that can cause formatting changes and require re-committing.
+
 ---
 
 ## 🏗️ **Architecture Overview**
 
-### **Extension Architecture** 
+### **Extension Architecture**
 Following standard JupyterLab patterns, we have 4 components:
 
 #### **🔧 Python Server Extensions** (Backend only)
@@ -16,7 +43,7 @@ Following standard JupyterLab patterns, we have 4 components:
    - `room_proxy.py` - Y-document WebSocket helper
    - **Type**: Jupyter Server extension (Python only)
 
-2. **`jupyter_agent_ydoc`** - Y-document manipulation endpoints  
+2. **`jupyter_agent_ydoc`** - Y-document manipulation endpoints
    - `handlers.py` - REST API for direct Y-document operations
    - **Type**: Jupyter Server extension (Python only)
 
@@ -176,43 +203,67 @@ Contents API → Persistent notebook state
 
 ---
 
-## 🚧 **PLANNED - Not Started**
+## 🚧 **IN PROGRESS**
 
-### **1. MCP Integration**
-- **Purpose**: Model Context Protocol for standardized agent communication
-- **Files**: `mcp-snowflake-service/` (placeholder exists)
-- **Status**: 🔄 PLANNED - Basic structure exists, needs implementation
-- **Integration Point**: Will use JupyterAgent tools as backend
+### **1. LangGraph Data Analysis Agent**
+- **Purpose**: Intelligent, iterative data analysis with LLM-driven decisions
+- **Files**: `packages/jupyter-agent/` (being implemented)
+- **Status**: 🚧 IN PROGRESS - Architecture designed, implementation started
+- **Features**:
+  - Pure LLM-driven decision making (no hardcoded logic)
+  - Dynamic planning with interactive editable cards
+  - Multi-step analysis with context awareness
+  - User interruption handling at any point
+  - Multi-LLM support (GPT-4, Claude, Llama)
+- **Integration**: Uses existing JupyterAgent tools and MCP Snowflake
 
-### **2. LangGraph Agent**
-- **Purpose**: Advanced multi-agent workflows and orchestration
-- **Files**: Not created yet
-- **Status**: 🔄 PLANNED - Design phase
-- **Integration Point**: Will use JupyterAgent as tool provider
+## ✅ **COMPLETED**
 
-### **3. Production Deployment**
-- **Purpose**: Docker containers, CI/CD, scaling
-- **Files**: Basic `docker/` exists, needs expansion
-- **Status**: 🔄 PLANNED - Infrastructure setup
+### **1. MCP Snowflake Integration**
+- **Purpose**: Connect to Snowflake databases via Model Context Protocol
+- **Files**: `mcp-snowflake-service/`
+- **Status**: ✅ COMPLETE - Working with chat extension
+- **Features**: Query execution, schema discovery, data loading
 
----
+### **2. Core JupyterLab Extension Infrastructure**
+- **`jupyter_agent_bridge/tools.py`** (470 lines)
+  - `JupyterAgent` class - Main interface for LLM agents
+  - `insert_code_and_execute()` - Primary tool (insert + execute + capture outputs)
+  - Building block tools: `insert_cell()`, `execute_cell()`, `update_cell_outputs()`
+  - Session management: automatic token/kernel handling
+  - **Status**: ✅ COMPLETE & TESTED
 
-## 🎯 **Current State Summary**
+- **`jupyter_agent_bridge/handlers.py`** (REST API endpoints)
+  - `/api/agent/notebook/insert` - Cell insertion endpoint
+  - `/api/agent/notebook/update_outputs` - Output update endpoint
+  - Dynamic token extraction and validation
+  - **Status**: ✅ COMPLETE & TESTED
 
-### ✅ **WHAT'S WORKING NOW**
-1. **Full JupyterLab Agent Extension** - Production ready
-2. **Real-time notebook interaction** - Cells appear instantly
-3. **Rich output support** - Matplotlib plots, HTML, DataFrames
-4. **Cross-cell targeting** - Insert code in A, execute B, output to C
-5. **Session management** - Automatic token/kernel handling
-6. **Execution count sequencing** - Proper 1, 2, 3... progression
-7. **Comprehensive test suite** - All functionality validated
+- **`jupyter_agent_bridge/room_proxy.py`** (Y-document collaboration)
+  - WebSocket connection to Jupyter collaboration server
+  - Real-time Y-document updates for cell insertion
+  - XSRF token handling and authentication
+  - **Status**: ✅ COMPLETE & TESTED
+
+- **`jupyter_agent_bridge/__init__.py`** (Extension registration)
+  - Jupyter server extension setup
+  - Handler registration and routing
+  - **Status**: ✅ COMPLETE
+
+- **`jupyter_agent_ydoc/handlers.py`** (Collaboration support)
+  - Y-document room management
+  - Real-time synchronization support
+  - **Status**: ✅ COMPLETE
 
 ### 🔄 **NEXT STEPS**
-1. **MCP Service Implementation** - Standardized agent protocol
-2. **LangGraph Agent Development** - Multi-agent orchestration
-3. **Production Deployment** - Scaling and monitoring
-4. **Advanced Features** - Notebook templates, agent memory, etc.
+1. **Complete LangGraph Agent** (4 weeks)
+   - Week 1: Core graph implementation
+   - Week 2: Interactive planning features
+   - Week 3: Multi-LLM support
+   - Week 4: Testing and optimization
+2. **Production Deployment** - Docker, Kubernetes, monitoring
+3. **Advanced Features** - Multi-notebook support, agent memory
+4. **Additional MCP Tools** - Beyond Snowflake (APIs, files, etc.)
 
 ### ⚠️ **PENDING ISSUES**
 1. **JupyterLab Production Build** - [See JUPYTERLAB_BUILD_ISSUES.md](./JUPYTERLAB_BUILD_ISSUES.md)
