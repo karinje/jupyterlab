@@ -272,6 +272,53 @@ Contents API → Persistent notebook state
    - **Future Solution**: Private npm registry or single extension approach
    - **Priority**: LOW (only needed for production deployment)
 
+### 🐛 **CRITICAL DEV WORKFLOW BUGS & SOLUTIONS**
+
+#### **Frontend Changes Not Reflecting in Browser**
+- **Problem**: TypeScript changes in `packages/chat/src/` don't show up in JupyterLab UI
+- **Root Cause**: JupyterLab dev mode loads bundled files from `dev_mode/static/`, not individual package `lib/` directories
+- **Wrong Solutions Tried**:
+  - ❌ Hard refresh browser
+  - ❌ Restart JupyterLab only
+  - ❌ Run `npm run watch` in individual packages
+  - ❌ Touch package.json files
+  - ❌ Manual compilation with `tsc --skipLibCheck`
+- **✅ CORRECT SOLUTION**: **MUST run webpack watch in dev_mode**
+  ```bash
+  cd dev_mode && npm run watch
+  ```
+- **Why This Works**:
+  - Individual package watch only compiles TypeScript → JavaScript in `packages/*/lib/`
+  - JupyterLab actually loads bundled files from `dev_mode/static/`
+  - Only webpack watch in `dev_mode` updates these bundled files
+  - Without this, source changes never reach the browser
+- **Required Dev Workflow**:
+  1. Start JupyterLab: `jupyter lab --dev-mode --extensions-in-dev-mode`
+  2. **Start webpack watch**: `cd dev_mode && npm run watch` (CRITICAL!)
+  3. Make TypeScript changes
+  4. Webpack automatically rebuilds bundles
+  5. Refresh browser to see changes
+- **Never Forget**: Always run both JupyterLab AND webpack watch simultaneously
+
+#### **Git Commit Hooks Breaking Development Workflow**
+- **Problem**: Git pre-commit hooks interrupt commits and truncate detailed commit messages
+- **Symptoms**: 
+  - Commit stops with "files were modified by this hook"
+  - Detailed commit messages get lost/truncated
+  - Workflow interrupted during rapid development iterations
+- **Root Cause**: Pre-commit hooks (end-of-file-fixer, etc.) automatically modify files during commit
+- **✅ SOLUTION**: Use `--no-verify` flag during active development:
+  ```bash
+  git commit --no-verify -m "your detailed commit message"
+  ```
+- **When to Use**: 
+  - ✅ Active development with frequent commits
+  - ✅ When preserving detailed commit messages is important
+  - ✅ Rapid prototyping and iteration phases
+- **When NOT to Use**: 
+  - ❌ Final commits before PR submission (let hooks clean up formatting)
+  - ❌ Production releases (ensure code formatting is clean)
+
 ---
 
 ## 🚀 **Ready for LLM Integration**

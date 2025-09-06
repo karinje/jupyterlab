@@ -77,15 +77,16 @@ export class ChatManager {
         </div>
 
         <div style="display: flex; gap: 8px;">
-          <select id="chat-provider" style="padding: 4px 8px; border: 1px solid #c0c0c0; border-radius: 4px; font-size: 12px;">
-            <option>OpenAI</option>
-            <option>Claude</option>
-            <option>Local</option>
+          <select id="chat-model" style="padding: 4px 8px; border: 1px solid #c0c0c0; border-radius: 4px; font-size: 12px;">
+            <option value="gpt-4o">GPT-4o WORKING</option>
+            <option value="gpt-4o-mini" selected>GPT-4o Mini</option>
+            <option value="o1-preview">o1-preview</option>
+            <option value="o1-mini">o1-mini</option>
           </select>
           <select id="chat-mode" style="padding: 4px 8px; border: 1px solid #c0c0c0; border-radius: 4px; font-size: 12px;">
-            <option>Auto</option>
-            <option>Agent</option>
-            <option>Manual</option>
+            <option value="auto" selected>Auto</option>
+            <option value="langgraph">🧠 LangGraph</option>
+            <option value="openai_agents">🤖 OpenAI Agents</option>
           </select>
           <button id="chat-clear-btn" style="padding: 4px 8px; border: 1px solid #c0c0c0; background: white; border-radius: 4px; cursor: pointer; font-size: 12px;">🗑️</button>
         </div>

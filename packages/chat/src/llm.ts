@@ -1,4 +1,5 @@
 import { ILLMProvider, IMCPServersConfig } from './tokens';
+import { ServerConnection } from '@jupyterlab/services';
 
 /**
  * Base LLM Provider implementation
@@ -48,37 +49,33 @@ export class OpenAIProvider extends BaseLLMProvider {
 
   async sendMessage(message: string, context?: any): Promise<string> {
     try {
-      // Get XSRF token from page - try multiple methods
-      const xsrfToken =
-        document.querySelector('meta[name="_xsrf"]')?.getAttribute('content') ||
-        (document.cookie.match(/_xsrf=([^;]+)/) || [])[1] ||
-        (document.cookie.match(/xsrf=([^;]+)/) || [])[1] ||
-        '';
-
-      console.log('🔑 XSRF token found:', xsrfToken ? 'YES' : 'NO');
       console.log(
         '🚀 Sending to server extension with MCP servers:',
         Object.keys(this.mcpServers)
       );
 
-      // ALL requests go through server-side API - NO API keys in browser!
-      const response = await fetch('/api/chat/openai', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-XSRFToken': xsrfToken,
-          'X-Requested-With': 'XMLHttpRequest'
+      // Use JupyterLab's ServerConnection which handles CSRF automatically
+      const settings = ServerConnection.makeSettings();
+      const requestUrl = new URL('/api/chat/openai', settings.baseUrl).href;
+      
+      const response = await ServerConnection.makeRequest(
+        requestUrl,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            message: message,
+            model: this._getSelectedModel(),  // Use selected model from dropdown
+            mcpServers: this.mcpServers,
+            context: context,
+            chat_mode: this._getChatMode()  // Add chat mode selection
+          })
         },
-        body: JSON.stringify({
-          message: message,
-          model: this._currentModel || 'gpt-4o-mini',
-          mcpServers: this.mcpServers,
-          context: context
-        })
-      });
+        settings
+      );
 
       if (!response.ok) {
-        throw new Error(`Server error: ${response.statusText}`);
+        const errorText = await response.text();
+        throw new Error(`Server error: ${response.status} ${errorText}`);
       }
 
       const data = await response.json();
@@ -91,6 +88,22 @@ export class OpenAIProvider extends BaseLLMProvider {
 
   async getModels(): Promise<string[]> {
     return ['gpt-4o', 'gpt-4o-mini', 'o1-preview', 'o1-mini'];
+  }
+
+  /**
+   * Get chat mode from UI selection
+   */
+  private _getChatMode(): string {
+    const modeSelect = document.querySelector('#chat-mode') as HTMLSelectElement;
+    return modeSelect?.value || 'auto';
+  }
+
+  /**
+   * Get selected model from UI dropdown
+   */
+  private _getSelectedModel(): string {
+    const modelSelect = document.querySelector('#chat-model') as HTMLSelectElement;
+    return modelSelect?.value || this._currentModel || 'gpt-4o-mini';
   }
 }
 
