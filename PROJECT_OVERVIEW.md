@@ -343,6 +343,8 @@ class MyLLMAgent:
 
 ## Jupyter Tools Bridge - Working Snapshot (RTC YDoc)
 
+See full docs: [docs/JupyterToolsBridge.md](docs/JupyterToolsBridge.md)
+
 - Server extension: `jupyter_tools_bridge` (Python, server-side)
   - Handlers: `jupyter_tools_bridge/handlers.py`
   - Live YDoc ops: insert/update/delete/execute/save against the live shared model (RTC)
