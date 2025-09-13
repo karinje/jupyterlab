@@ -1,0 +1,63 @@
+
+> @jupyterlab/application-top@4.5.0-alpha.1 watch
+> webpack --watch
+
+assets by path *.js 80.6 MiB
+  assets by chunk 56.3 MiB (id hint: vendors)
+    asset vendors-node_modules_mermaid-js_layout-elk_dist_chunks_mermaid-layout-elk_core_render-M6WAID4X_mjs.bae028f6f8496aa9d956.js 4.25 MiB [emitted] [immutable] (id hint: vendors)
+    asset vendors-node_modules_cytoscape_dist_cytoscape_esm_mjs.b4741885f0c832bf497c.js 2.76 MiB [emitted] [immutable] (id hint: vendors)
+    asset vendors-node_modules_vega-lite_build_src_index_js.8ed57305507f1f0a8c04.js 2.67 MiB [emitted] [immutable] (id hint: vendors)
+    asset vendors-node_modules_mermaid-js_parser_dist_mermaid-parser_core_mjs.1d36f7e4a312cd083d5f.js 2.65 MiB [emitted] [immutable] (id hint: vendors)
+    + 127 assets
+  + 226 assets
+assets by chunk 3.11 MiB (auxiliary id hint: vendors)
+  assets by path *.woff 524 KiB 25 assets
+  assets by path *.svg 1.73 MiB 3 assets
+  assets by path *.eot 363 KiB 3 assets
+  assets by path *.ttf 362 KiB 3 assets
+  assets by path *.woff2 164 KiB 3 assets
+asset index.html 1.98 KiB [emitted]
+orphan modules 835 KiB [orphan] 703 modules
+runtime modules 320 KiB 16 modules
+javascript modules 25.9 MiB
+  modules by path ../node_modules/ 20.7 MiB 3062 modules
+  modules by path ../packages/ 5.19 MiB 804 modules
+  modules by path ./ 32.6 KiB 5 modules
+  + 5 modules
+asset modules 131 KiB (javascript) 3.11 MiB (asset) 281 modules
+provide-module modules 5.82 KiB 142 modules
+consume-shared-module modules 5.82 KiB 142 modules
+json modules 17.7 KiB
+  modules by path ../node_modules/ajv/dist/ 3.07 KiB 2 modules
+  + 3 modules
+webpack 5.101.3 compiled successfully in 6229 ms
+
+asset index.css 19.1 KiB [compared for emit] (name: index)
+asset index.js 0 bytes [compared for emit] [minimized] (name: index)
+Entrypoint index 19.1 KiB = index.css 19.1 KiB index.js 0 bytes
+orphan modules 22.4 KiB (javascript) 937 bytes (runtime) [orphan] 8 modules
+cacheable modules 50 bytes (javascript) 19.1 KiB (css/mini-extract)
+  ../packages/theme-dark-extension/style/theme.css 50 bytes [built] [code generated]
+  css ../node_modules/css-loader/dist/cjs.js!../packages/theme-dark-extension/style/variables.css 18.3 KiB [built] [code generated]
+  css ../node_modules/css-loader/dist/cjs.js!../packages/theme-dark-extension/style/theme.css 769 bytes [built] [code generated]
+webpack 5.101.3 compiled successfully in 490 ms
+
+asset index.css 18.1 KiB [compared for emit] (name: index)
+asset index.js 0 bytes [compared for emit] [minimized] (name: index)
+Entrypoint index 18.1 KiB = index.css 18.1 KiB index.js 0 bytes
+orphan modules 21.5 KiB (javascript) 937 bytes (runtime) [orphan] 8 modules
+cacheable modules 50 bytes (javascript) 18.1 KiB (css/mini-extract)
+  ../packages/theme-dark-high-contrast-extension/style/theme.css 50 bytes [built] [code generated]
+  css ../node_modules/css-loader/dist/cjs.js!../packages/theme-dark-high-contrast-extension/style/variables.css 17.4 KiB [built] [code generated]
+  css ../node_modules/css-loader/dist/cjs.js!../packages/theme-dark-high-contrast-extension/style/theme.css 769 bytes [built] [code generated]
+webpack 5.101.3 compiled successfully in 488 ms
+
+asset index.css 17.7 KiB [compared for emit] (name: index)
+asset index.js 0 bytes [compared for emit] [minimized] (name: index)
+Entrypoint index 17.7 KiB = index.css 17.7 KiB index.js 0 bytes
+orphan modules 21 KiB (javascript) 937 bytes (runtime) [orphan] 8 modules
+cacheable modules 50 bytes (javascript) 17.7 KiB (css/mini-extract)
+  ../packages/theme-light-extension/style/theme.css 50 bytes [built] [code generated]
+  css ../node_modules/css-loader/dist/cjs.js!../packages/theme-light-extension/style/variables.css 17.1 KiB [built] [code generated]
+  css ../node_modules/css-loader/dist/cjs.js!../packages/theme-light-extension/style/theme.css 572 bytes [built] [code generated]
+webpack 5.101.3 compiled successfully in 487 ms

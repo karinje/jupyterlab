@@ -8,7 +8,7 @@
 ```
 ➤ YN0035: │ @jupyterlab/chat@npm:~4.1.0: The remote server failed to provide the requested resource
 ➤ YN0035: │   Response Code: 404 (Not Found)
-➤ YN0035: │   Request Method: GET  
+➤ YN0035: │   Request Method: GET
 ➤ YN0035: │   Request URL: https://registry.yarnpkg.com/@jupyterlab%2fchat
 ```
 
@@ -230,12 +230,12 @@ ls -la /var/folders/*/T/jupyterlab-debug-*.log
 
 ## 📞 **Resources**
 
-- [JupyterLab Extension Tutorial](https://jupyterlab.readthedocs.io/en/stable/extension/extension_tutorial.html)
-- [JupyterLab Advanced Usage](https://jupyterlab.readthedocs.io/en/stable/user/directories.html)
+- [JupyterLab Extension Tutorial](https://jupyterlab.readthedocs.io/en/latest/extension/extension_tutorial.html)
+- [JupyterLab Advanced Usage](https://jupyterlab.readthedocs.io/en/latest/user/directories.html)
 - [npm Workspaces Documentation](https://docs.npmjs.com/cli/v7/using-npm/workspaces)
 - [Verdaccio Private Registry](https://verdaccio.org/)
 
 ---
 
-**Last Updated**: September 2025  
-**Status**: Development working with dev flags, production build unresolved 
+**Last Updated**: September 2025
+**Status**: Development working with dev flags, production build unresolved

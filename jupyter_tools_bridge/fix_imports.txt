@@ -1,0 +1,8 @@
+        import logging
+        logger = logging.getLogger(__name__)
+        from pycrdt import Doc, Map, Array, Text
+        import uuid
+        from .room_proxy import RoomProxy
+
+        # Get token
+        token = await self._ensure_token()

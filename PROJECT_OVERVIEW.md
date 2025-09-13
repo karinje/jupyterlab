@@ -39,13 +39,11 @@ Following standard JupyterLab patterns, we have 4 components:
 
 #### **🔧 Python Server Extensions** (Backend only)
 1. **`jupyter_agent_bridge`** - Core agent tools and utilities
-   - `tools.py` - `JupyterAgent` class with LLM tools
+   - `tools.py` - `JupyterAgent` class with LLM tools (YDoc-first approach)
    - `room_proxy.py` - Y-document WebSocket helper
+   - `handlers.py` - REST API endpoints for agent operations
    - **Type**: Jupyter Server extension (Python only)
-
-2. **`jupyter_agent_ydoc`** - Y-document manipulation endpoints
-   - `handlers.py` - REST API for direct Y-document operations
-   - **Type**: Jupyter Server extension (Python only)
+   - **Architecture**: Uses Y-documents for real-time cell insertion and output updates
 
 #### **🎨 JupyterLab Frontend Extension** (Frontend + Backend)
 3. **`@jupyterlab/chat`** - Chat components library
@@ -302,7 +300,7 @@ Contents API → Persistent notebook state
 
 #### **Git Commit Hooks Breaking Development Workflow**
 - **Problem**: Git pre-commit hooks interrupt commits and truncate detailed commit messages
-- **Symptoms**: 
+- **Symptoms**:
   - Commit stops with "files were modified by this hook"
   - Detailed commit messages get lost/truncated
   - Workflow interrupted during rapid development iterations
@@ -311,11 +309,11 @@ Contents API → Persistent notebook state
   ```bash
   git commit --no-verify -m "your detailed commit message"
   ```
-- **When to Use**: 
+- **When to Use**:
   - ✅ Active development with frequent commits
   - ✅ When preserving detailed commit messages is important
   - ✅ Rapid prototyping and iteration phases
-- **When NOT to Use**: 
+- **When NOT to Use**:
   - ❌ Final commits before PR submission (let hooks clean up formatting)
   - ❌ Production releases (ensure code formatting is clean)
 
@@ -342,3 +340,48 @@ class MyLLMAgent:
 ```
 
 **The foundation is solid - ready to build advanced agent workflows on top!** 🎉
+
+## Jupyter Tools Bridge - Working Snapshot (RTC YDoc)
+
+- Server extension: `jupyter_tools_bridge` (Python, server-side)
+  - Handlers: `jupyter_tools_bridge/handlers.py`
+  - Live YDoc ops: insert/update/delete/execute/save against the live shared model (RTC)
+- Test notebook: `test_tools.ipynb`
+- Tests:
+  - `test_scripts/test_ydoc_tools.py` (INDEX + ID flows, force save)
+  - `test_scripts/test_mcp.py` (kept for MCP integration)
+  - Env check: `test_scripts/tools_env_check.py`
+
+### How we ran and validated
+
+1) Start JupyterLab (dev mode with DEBUG logs):
+```bash
+jupyter lab --dev-mode --extensions-in-dev-mode --ServerApp.log_level=DEBUG --port=8890 --config=jupyter_server_config.py
+```
+- `jupyter_server_config.py` enables:
+  - `jupyter_server_fileid`, `jupyter_server_ydoc`, `jupyter_collaboration`, `jupyter_tools_bridge`
+- Open `test_tools.ipynb` in the browser to ensure a live session/kernel
+
+2) Run the tools E2E tests:
+```bash
+python test_scripts/test_ydoc_tools.py
+```
+- Covers:
+  - Insert markdown/code (append and targeted)
+  - Update cell (by index and by cell_id)
+  - Execute with correct `execution_count` via IOPub `execute_input`
+  - Rich outputs (matplotlib), error outputs, streaming
+  - Delete last and delete by `cell_id`
+  - Force-save endpoint `/api/tools/save` to persist to disk
+
+3) Force save endpoint (server):
+- `POST /api/tools/save { path }` → serializes the current live YDoc to nbformat and calls `ContentsManager.save` to persist immediately.
+
+### Notes
+- Installation: we installed `jupyter_tools_bridge` as a Python package (editable) so the server auto-loads the extension; this is recommended for reliability. Dev flags plus PYTHONPATH can work, but package install is cleaner.
+- Everything operates on the live RTC model; changes appear in the UI instantly.
+- Persistence: rely on autosave or call the save endpoint to guarantee durability before restart.
+
+### Current Integration Status
+- Jupyter tools are working end-to-end (insert/update/execute/delete/save) with tests and docs updated.
+- We also built a working version of the agent, but integration of the agent with these Jupyter tools and chat still needs to be worked on (loose ends since we redid tools; some links may be broken).

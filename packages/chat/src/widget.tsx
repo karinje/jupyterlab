@@ -76,17 +76,19 @@ export class ChatManager {
           <button id="chat-send-btn" style="padding: 8px 12px; background: #007acc; color: white; border: none; border-radius: 6px; cursor: pointer;">➤</button>
         </div>
 
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <select id="chat-provider" style="padding: 4px 8px; border: 1px solid #c0c0c0; border-radius: 4px; font-size: 12px;">
+            <option value="openai" selected>🤖 OpenAI</option>
+            <option value="anthropic">🧠 Anthropic</option>
+            <option value="google" disabled>🔍 Google (Soon)</option>
+          </select>
           <select id="chat-model" style="padding: 4px 8px; border: 1px solid #c0c0c0; border-radius: 4px; font-size: 12px;">
-            <option value="gpt-4o">GPT-4o WORKING</option>
-            <option value="gpt-4o-mini" selected>GPT-4o Mini</option>
+            <option value="gpt-4o" selected>GPT-4o</option>
+            <option value="gpt-4o-mini">GPT-4o Mini</option>
             <option value="o1-preview">o1-preview</option>
             <option value="o1-mini">o1-mini</option>
-          </select>
-          <select id="chat-mode" style="padding: 4px 8px; border: 1px solid #c0c0c0; border-radius: 4px; font-size: 12px;">
-            <option value="auto" selected>Auto</option>
-            <option value="langgraph">🧠 LangGraph</option>
-            <option value="openai_agents">🤖 OpenAI Agents</option>
+            <option value="gpt-4-turbo">GPT-4 Turbo</option>
+            <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
           </select>
           <button id="chat-clear-btn" style="padding: 4px 8px; border: 1px solid #c0c0c0; background: white; border-radius: 4px; cursor: pointer; font-size: 12px;">🗑️</button>
         </div>
@@ -100,6 +102,18 @@ export class ChatManager {
     closeBtn?.addEventListener('click', () => {
       console.log('🔥 Close button clicked');
       this.hide();
+    });
+
+    // Add provider change listener to update models
+    const providerSelect = this._dialogElement.querySelector(
+      '#chat-provider'
+    ) as HTMLSelectElement;
+    const modelSelect = this._dialogElement.querySelector(
+      '#chat-model'
+    ) as HTMLSelectElement;
+
+    providerSelect?.addEventListener('change', () => {
+      this._updateModelsForProvider(providerSelect.value, modelSelect);
     });
 
     const sendBtn = this._dialogElement.querySelector(
@@ -530,5 +544,54 @@ export class ChatManager {
       this._dialogElement.parentNode.removeChild(this._dialogElement);
     }
     this._dialogElement = null;
+  }
+
+  private _updateModelsForProvider(
+    provider: string,
+    modelSelect: HTMLSelectElement
+  ): void {
+    // Clear existing options
+    modelSelect.innerHTML = '';
+
+    let models: { value: string; label: string }[] = [];
+
+    switch (provider) {
+      case 'openai':
+        models = [
+          { value: 'gpt-4o', label: 'GPT-4o' },
+          { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+          { value: 'o1-preview', label: 'o1-preview' },
+          { value: 'o1-mini', label: 'o1-mini' },
+          { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+          { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' }
+        ];
+        break;
+      case 'anthropic':
+        models = [
+          { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
+          { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
+          { value: 'claude-3-sonnet-20240229', label: 'Claude 3 Sonnet' },
+          { value: 'claude-3-haiku-20240307', label: 'Claude 3 Haiku' }
+        ];
+        break;
+      case 'google':
+        models = [
+          { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+          { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+          { value: 'gemini-pro', label: 'Gemini Pro' }
+        ];
+        break;
+      default:
+        models = [{ value: 'gpt-4o', label: 'GPT-4o' }];
+    }
+
+    // Add options to select
+    models.forEach((model, index) => {
+      const option = document.createElement('option');
+      option.value = model.value;
+      option.textContent = model.label;
+      if (index === 0) option.selected = true; // Select first option by default
+      modelSelect.appendChild(option);
+    });
   }
 }

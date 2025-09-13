@@ -49,18 +49,20 @@ def main():
 
     # Manually load our extension before starting
     try:
-        logger.info("Loading jupyter_agent_ydoc extension...")
-        from jupyter_agent_ydoc import _load_jupyter_server_extension
+        logger.info("Loading jupyter_agent_bridge extension...")
+        from jupyter_agent_bridge import _load_jupyter_server_extension
 
         _load_jupyter_server_extension(app)
-        logger.info("✓ YDoc extension loaded successfully!")
+        logger.info("✓ Agent bridge extension loaded successfully!")
 
         # Show available endpoints
-        logger.info("Available YDoc endpoints:")
-        logger.info("  POST /api/agent/ydoc/insert - Insert new cell")
-        logger.info("  POST /api/agent/ydoc/update - Update cell content")
-        logger.info("  POST /api/agent/ydoc/delete - Delete cell")
-        logger.info("  POST /api/agent/ydoc/run - Execute cell")
+        logger.info("Available endpoints:")
+        logger.info("  JupyterAgent with consistent YDoc handlers:")
+        logger.info("    - Cell insertion: YDoc handler (proper auth + real-time)")
+        logger.info("    - Output updates: YDoc handler (proper auth + real-time)")
+        logger.info("    - Code execution: Kernel WebSocket")
+        logger.info("  POST /api/agent/notebook/insert - YDoc cell insertion")
+        logger.info("  POST /api/agent/notebook/update_outputs - YDoc output updates")
 
     except Exception as e:
         logger.error("✗ Failed to load YDoc extension: %s", e)

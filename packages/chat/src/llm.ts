@@ -57,17 +57,18 @@ export class OpenAIProvider extends BaseLLMProvider {
       // Use JupyterLab's ServerConnection which handles CSRF automatically
       const settings = ServerConnection.makeSettings();
       const requestUrl = new URL('/api/chat/openai', settings.baseUrl).href;
-      
+
       const response = await ServerConnection.makeRequest(
         requestUrl,
         {
           method: 'POST',
           body: JSON.stringify({
             message: message,
-            model: this._getSelectedModel(),  // Use selected model from dropdown
-            mcpServers: this.mcpServers,
+            model: this._getSelectedModel(), // Use selected model from dropdown
+            provider: this._getSelectedProvider(), // Add provider selection
+            mcpServers: {}, // Temporarily disable MCP to isolate LangGraph
             context: context,
-            chat_mode: this._getChatMode()  // Add chat mode selection
+            chat_mode: 'langgraph' // Add chat mode selection
           })
         },
         settings
@@ -87,23 +88,34 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   async getModels(): Promise<string[]> {
-    return ['gpt-4o', 'gpt-4o-mini', 'o1-preview', 'o1-mini'];
-  }
-
-  /**
-   * Get chat mode from UI selection
-   */
-  private _getChatMode(): string {
-    const modeSelect = document.querySelector('#chat-mode') as HTMLSelectElement;
-    return modeSelect?.value || 'auto';
+    return [
+      'gpt-4o',
+      'gpt-4o-mini',
+      'o1-preview',
+      'o1-mini',
+      'gpt-4-turbo',
+      'gpt-3.5-turbo'
+    ];
   }
 
   /**
    * Get selected model from UI dropdown
    */
   private _getSelectedModel(): string {
-    const modelSelect = document.querySelector('#chat-model') as HTMLSelectElement;
+    const modelSelect = document.querySelector(
+      '#chat-model'
+    ) as HTMLSelectElement;
     return modelSelect?.value || this._currentModel || 'gpt-4o-mini';
+  }
+
+  /**
+   * Get selected provider from UI dropdown
+   */
+  private _getSelectedProvider(): string {
+    const providerSelect = document.querySelector(
+      '#chat-provider'
+    ) as HTMLSelectElement;
+    return providerSelect?.value || 'openai';
   }
 }
 
@@ -189,8 +201,9 @@ For regular questions that don't require planning, respond normally.`,
 
   async getModels(): Promise<string[]> {
     return [
-      'claude-3-sonnet-20240229',
+      'claude-3-5-sonnet-20241022',
       'claude-3-opus-20240229',
+      'claude-3-sonnet-20240229',
       'claude-3-haiku-20240307'
     ];
   }

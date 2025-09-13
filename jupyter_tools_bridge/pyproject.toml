@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jupyter_tools_bridge"
+version = "0.1.0"
+dependencies = [
+    "jupyter_server>=2.0",
+    "jupyter_server_ydoc>=2.0",
+    "jupyter_ydoc>=3.0",
+    "aiohttp",
+    "nbformat",
+    "jupyter_client",
+]
+
+[project.entry-points."jupyter_server.extension.v1"]
+jupyter_tools_bridge = "jupyter_tools_bridge"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
