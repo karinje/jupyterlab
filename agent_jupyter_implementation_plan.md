@@ -7,30 +7,24 @@
 
 ### Executive Summary
 This implementation delivers agent-controlled notebook editing through a **YDoc-first approach**:
-- **Cell insertion**: Real-time via Y-document updates (RoomProxy)
-- **Code execution**: Direct kernel WebSocket connection
-- **Output insertion**: Real-time via Y-document updates (RoomProxy)
+- **Live YDoc access**: Resolve the open notebook via `YDocExtension.get_document(path, content_type="notebook", file_format="json", copy=False)`
+- **Cell CRUD**: Use `YNotebook` live APIs (`append_cell`, `create_ycell` + `set_ycell`, `get_cell`, `ycells.pop`) for real-time updates
+- **Code execution**: Kernel via `jupyter_client` with authoritative `execution_count` from IOPub `execute_input`
+- **Persistence**: Force-save endpoint serializes the live YDoc to nbformat and calls `ContentsManager.save()`
 - **Authentication**: Dynamic token extraction and XSRF handling
 
 ### Architecture Overview
 ```
-┌─────────────┐  REST  ┌────────────────────┐  YDoc/WebSocket     ┌─────────────────────┐
-│  AI Agent   │───────►│  jupyter_agent_    │────────────────────►│  JupyterLab Server  │
-│  (OpenAI)   │        │  bridge Extension  │                     │  (Live Notebooks)   │
-└─────────────┘        └────────────────────┘                     └─────────────────────┘
-                                │
-                                ├── RoomProxy (Y-doc cell insertion)
-                                ├── Kernel WebSocket (code execution)
-                                └── RoomProxy (Y-doc output updates)
+┌─────────────┐   REST   ┌────────────────────────────┐   RTC/YDoc APIs      ┌─────────────────────┐
+│  AI Agent   │────────► │  jupyter_tools_bridge      │────────────────────► │  JupyterLab Server  │
+│  (OpenAI)   │          │  (Server Extension)        │                      │  (Live Notebooks)   │
+└─────────────┘          └────────────────────────────┘                      └─────────────────────┘
+                                   │
+                                   ├── YDocExtension.get_document(path, copy=False) → YNotebook (LIVE)
+                                   ├── YNotebook ops: insert/update/delete (RTC sync to UI)
+                                   ├── Kernel execution via jupyter_client (IOPub stream)
+                                   └── ContentsManager.save() for durability
 ```
-
-### Key Design Principles (Proven)
-
-1. **UUID-based Cell Targeting**: Every cell has a unique ID for reliable cross-cell operations
-2. **Rich Output Parity**: Full compatibility with native JupyterLab (plots, HTML, DataFrames)
-3. **Real-time Updates**: Instant synchronization across all browser tabs
-4. **Dynamic Authentication**: Auto-discovery of tokens and XSRF handling
-5. **Kernel Resilience**: Automatic kernel creation and error recovery
 
 ---
 
@@ -38,102 +32,73 @@ This implementation delivers agent-controlled notebook editing through a **YDoc-
 
 ### Core Components
 
-#### 1. RoomProxy Helper (✅ Working)
+#### 1. Live YDoc Resolution (✅ Working)
 ```python
-# jupyter_agent_bridge/room_proxy.py
-class RoomProxy:
-    """Handles Jupyter Collaboration API for real-time cell insertion"""
-
-    async def __aenter__(self):
-        # 1. Get XSRF token from /lab page
-        # 2. Join collaboration session via POST /api/collaboration/session/{path}
-        # 3. Open WebSocket to /api/collaboration/room/{room_id}
-
-    async def apply_yupdate(self, update: bytes):
-        # Send Y-document update for instant cell insertion
+# jupyter_tools_bridge/handlers.py (Base handler)
+async def get_live_notebook(self, path: str) -> Optional[YNotebook]:
+    ydoc_ext = self.settings.get("ydoc_extension")
+    if not ydoc_ext:
+        from jupyter_server_ydoc import YDocExtension
+        ydoc_ext = YDocExtension.instance()
+    if not ydoc_ext:
+        return None
+    ynb = await ydoc_ext.get_document(
+        path=path,
+        content_type="notebook",
+        file_format="json",
+        copy=False
+    )
+    return ynb if isinstance(ynb, YNotebook) else None
 ```
 
 **Features:**
-- Dynamic XSRF token acquisition
-- Automatic session management
-- Real-time Y-document updates
+- Resolves the live shared model (no file IO) so changes sync instantly to the UI
+- Defensive resolution via extension settings with fallback to singleton
+- Works with JupyterLab RTC (`jupyter_server_ydoc` + `jupyter_collaboration`)
 
 #### 2. REST API Endpoints (✅ Working)
 
-**`/api/agent/notebook/insert`** - Cell insertion via Y-documents
-```python
-POST /api/agent/notebook/insert
-{
-    "path": "notebook.ipynb",
-    "cell_type": "code",
-    "content": "print('Hello from agent!')",
-    "position": 0  # or "end", "start"
-}
-Response: {"cell_id": "uuid-string", "status": "success"}
-```
+- `POST /api/tools/insert-cell`
+  - `{ path, index: int|"append", cell_type: "code"|"markdown"|"raw", source }` → `{ status, cell_id, index }`
+- `POST /api/tools/update-cell`
+  - `{ path, cell_id?: string, index?: number, source?, metadata? }` → `{ status, index }`
+- `POST /api/tools/execute-cell`
+  - `{ path, kernel_id, cell_id?: string, index?: number, stream?: boolean }` → `{ status, index, execution_count, outputs_count }`
+  - Execution count captured from IOPub `execute_input`
+- `POST /api/tools/delete-cell`
+  - `{ path, index: number|"last" }` or `{ path, cell_id }` → `{ status, deleted_index, cells_remaining }`
+- `POST /api/tools/notebook-state`
+  - `{ path }` → `{ status, path, cells_count, cells: [...] }`
+- `GET /api/tools/sessions`
+  - `{ status, sessions: [...] }` (to obtain `kernel_id`)
+- `POST /api/tools/save`
+  - `{ path }` → serializes live YDoc to nbformat and persists immediately
 
-**`/api/agent/notebook/update_outputs`** - Output insertion via Contents API
-```python
-POST /api/agent/notebook/update_outputs
-{
-    "path": "notebook.ipynb",
-    "cell_index": 0,  # Dynamically determined from cell_id
-    "outputs": [...],  # Full kernel output objects
-    "execution_count": 5
-}
-```
-
-#### 3. Agent Tool Design (Recommended)
-
-Based on our testing, the optimal agent toolset:
+#### 3. Jupyter Tools Client (Recommended)
 
 ```python
-class JupyterAgent:
-    """Agent session managing infrastructure (token, kernel, XSRF)"""
+class JupyterTools:
+    """Thin client for the server-side tools endpoints"""
 
-    def __init__(self, server_url: str = "http://127.0.0.1:8890"):
-        # Auto-discover token, create default kernel
-
-    # 🔥 PRIMARY TOOL - Most common agent operation
     async def insert_code_and_execute(self, notebook_path: str, code: str,
-                                     cell_type: str = "code", position: str = "end",
-                                     kernel_id: str = None) -> dict:
-        """
-        Complete workflow: Insert cell + Execute code + Capture outputs
+                                     cell_type: str = "code", position: str = "append",
+                                     kernel_id: str | None = None) -> dict:
+        """Insert + execute + capture outputs with correct execution_count"""
 
-        This is the PRIMARY tool agents will use most frequently.
-        Returns: {
-            "cell_id": "uuid-string",
-            "outputs": [...],  # All kernel outputs (plots, text, errors)
-            "execution_count": 5,
-            "status": "ok|error"
-        }
-        """
-
-    # Core Building Block Tools
     async def insert_cell(self, notebook_path: str, content: str,
-                         cell_type: str = "code", position: str = "end") -> str:
-        """Returns cell_id (UUID)"""
+                         cell_type: str = "code", position: str = "append") -> str: ...
 
-    async def execute_cell(self, notebook_path: str, cell_id: str = None,
-                          content: str = None, kernel_id: str = None) -> dict:
-        """Returns {"outputs": [...], "execution_count": int, "status": str}"""
+    async def execute_cell(self, notebook_path: str, cell_id: str | None = None,
+                          content: str | None = None, kernel_id: str | None = None) -> dict: ...
 
-    async def update_cell_outputs(self, notebook_path: str, cell_id: str,
-                                 outputs: list, execution_count: int = None) -> bool:
-        """Insert outputs into specific cell by UUID"""
+    async def update_cell(self, notebook_path: str, *, cell_id: str | None = None,
+                         index: int | None = None, source: str | None = None,
+                         metadata: dict | None = None) -> bool: ...
 
-    async def get_cell_content(self, notebook_path: str, cell_id: str = None) -> dict:
-        """Get cell content by UUID or all cells"""
+    async def delete_cell(self, notebook_path: str, *, cell_id: str | None = None,
+                         index: int | str | None = None) -> bool: ...
 
-    # Advanced Cross-Cell Operations
-    async def execute_and_capture(self, notebook_path: str, code: str,
-                                 target_cell_id: str = None) -> dict:
-        """Execute code and route outputs to specific existing cell"""
-
-    async def insert_markdown(self, notebook_path: str, markdown: str,
-                             position: str = "end") -> str:
-        """Quick markdown cell insertion (no execution needed)"""
+    async def get_notebook_state(self, notebook_path: str) -> dict: ...
 ```
 
 ### Tool Usage Patterns
@@ -141,7 +106,7 @@ class JupyterAgent:
 #### 🔥 **Primary Pattern (90% of agent operations):**
 ```python
 # Agent wants to: "Create a plot showing sales data"
-result = await agent.insert_code_and_execute(
+result = await tools.insert_code_and_execute(
     "analysis.ipynb",
     """
     import matplotlib.pyplot as plt
@@ -156,12 +121,10 @@ result = await agent.insert_code_and_execute(
 
 #### **Advanced Cross-Cell Pattern (10% of operations):**
 ```python
-# Agent wants to: "Execute this code but put outputs in that specific cell"
-setup_cell = await agent.insert_cell("notebook.ipynb", "x = [1,2,3,4]")
-result_cell = await agent.insert_cell("notebook.ipynb", "# Results will appear here")
-
-# Execute setup, capture outputs in result_cell
-await agent.execute_and_capture("notebook.ipynb", "sum(x)", target_cell_id=result_cell)
+# Execute code and route outputs to a specific existing cell (by id)
+setup_cell = await tools.insert_cell("notebook.ipynb", "x = [1,2,3,4]")
+result_cell = await tools.insert_cell("notebook.ipynb", "# Results will appear here", cell_type="markdown")
+await tools.execute_cell("notebook.ipynb", cell_id=result_cell, content="sum(x)")
 ```
 
 ### Proven Capabilities
@@ -193,32 +156,31 @@ await agent.execute_and_capture("notebook.ipynb", "sum(x)", target_cell_id=resul
 ## Implementation Status
 
 ### Phase 1: Core Extension ✅ COMPLETE
-- [x] `jupyter_agent_bridge` package structure
-- [x] REST API endpoints (`/insert`, `/update_outputs`)
-- [x] RoomProxy for Collaboration API
+- [x] `jupyter_tools_bridge` package structure
+- [x] REST API endpoints (`/api/tools/*`)
+- [x] Live YDoc access via `YDocExtension.get_document(path, copy=False)`
 - [x] Dynamic token/XSRF handling
 - [x] UUID-based cell identification
 
 ### Phase 2: Execution Engine ✅ COMPLETE
-- [x] Direct kernel WebSocket connection
+- [x] Kernel execution via `jupyter_client` (IOPub stream)
 - [x] Rich output capture (all types)
-- [x] Cross-cell output routing
+- [x] Correct `execution_count` from `execute_input`
 - [x] Kernel error handling
-- [x] Contents API integration
+- [x] Explicit persistence endpoint (`/api/tools/save`)
 
 ### Phase 3: Agent Tools ✅ COMPLETE
 - [x] Core tool design validated
 - [x] Session management pattern
-- [x] **JupyterAgent class implemented** (`jupyter_agent_bridge/tools.py`)
+- [x] **JupyterTools client** (`jupyter_tools_bridge/tools.py`)
 - [x] **Primary tool: insert_code_and_execute**
-- [x] **Building block tools**: insert_cell, execute_cell, update_cell_outputs, get_cell_content
-- [x] **Convenience tools**: insert_markdown
+- [x] **Building block tools**: insert_cell, execute_cell, update_cell, get_notebook_state
 - [x] **Error handling and recovery**
-- [x] **Test suite available** (`test_agent_tools.py`)
+- [x] **Test suite available** (`test_ydoc_tools.py`)
 
 ### Phase 4: LLM Chat Integration ✅ COMPLETE
 - [x] **JupyterLab Chat Extension** (`packages/chat/` and `packages/chat-extension/`)
-- [x] **OpenAI Agents SDK Integration** with JupyterAgent tools
+- [x] **OpenAI Agents SDK Integration** with Jupyter tools
 - [x] **Tool Call Extraction** and conversation history saved to notebook metadata
 - [x] **MCP Server Support** (Model Context Protocol) for external data sources
 - [x] **Real-time UI Updates** via Y-document collaboration
@@ -242,19 +204,14 @@ await agent.execute_and_capture("notebook.ipynb", "sum(x)", target_cell_id=resul
 
 ```
 jupyterlab/
-├── jupyter_agent_bridge/           # ✅ Core Extension
-│   ├── __init__.py                # Extension registration
-│   ├── handlers.py                # REST API endpoints
-│   ├── room_proxy.py              # Y-document collaboration
-│   └── tools.py                   # 🔥 JupyterAgent class (470 lines)
+├── jupyter_tools_bridge/          # ✅ Server-side tools (RTC YDoc)
+│   ├── __init__.py               # Extension registration + YDocExtension stash
+│   ├── handlers.py               # REST API (insert/update/execute/delete/save/state/sessions)
+│   └── tools.py                  # Python client (JupyterTools)
 │
-├── jupyter_agent_ydoc/            # ✅ Y-document Support
-│   ├── __init__.py
-│   └── handlers.py                # Room management
-│
-├── packages/jupyter-agent/        # ✅ LangGraph Python Agent (WORKING)
-│   ├── jupyter_agent_lg/         # Main Python package
-│   │   ├── __init__.py           # Package exports
+├── packages/jupyter-agent/       # ✅ LangGraph Python Agent (WORKING)
+│   ├── jupyter_agent_lg/
+│   │   ├── __init__.py
 │   │   ├── agent.py              # LangGraph workflow with DataAnalysisAgent
 │   │   ├── schemas.py            # Pydantic schemas (LLMDecision, tool args)
 │   │   ├── state.py              # State management helpers
@@ -269,23 +226,21 @@ jupyterlab/
 │   ├── requirements.txt          # Python dependencies
 │   └── setup.py                  # Package setup
 │
-├── test_scripts/                  # ✅ Test Suite
-│   ├── README.md                  # Test documentation
-│   ├── test_agent_tools.py        # 🔥 Main test suite
-│   ├── test_complete_flow.py      # End-to-end workflow
-│   └── [9 other test files]       # Component tests
+├── test_scripts/                 # ✅ Test Suite
+│   ├── README.md                 # Test documentation
+│   ├── test_ydoc_tools.py        # Tools E2E (index + id flows, force-save)
+│   └── tools_env_check.py        # Environment/extension sanity check
 │
-├── mcp-snowflake-service/         # ✅ MCP Snowflake integration
-├── PROJECT_OVERVIEW.md            # ✅ Complete project overview
+├── mcp-snowflake-service/        # ✅ MCP Snowflake integration
+├── PROJECT_OVERVIEW.md           # ✅ Complete project overview
 └── agent_jupyter_implementation_plan.md  # ✅ This technical guide
 ```
 
 **Key Files:**
-- **`jupyter_agent_bridge/tools.py`** - Main JupyterAgent class with all tools
-- **`packages/jupyter-agent/jupyter_agent_lg/agent.py`** - LangGraph DataAnalysisAgent (564 lines)
+- **`jupyter_tools_bridge/tools.py`** - Python client with tools endpoints
+- **`packages/jupyter-agent/jupyter_agent_lg/agent.py`** - LangGraph DataAnalysisAgent
 - **`packages/jupyter-agent/jupyter_agent_lg/tools/jupyter_tools.py`** - Modular notebook tools
-- **`packages/jupyter-agent/test_workflow.py`** - LangGraph workflow tests
-- **`test_scripts/test_agent_tools.py`** - Comprehensive test suite
+- **`test_scripts/test_ydoc_tools.py`** - Tools E2E tests
 - **`PROJECT_OVERVIEW.md`** - High-level architecture and status
 
 ---
@@ -298,12 +253,11 @@ jupyterlab/
 
 ```python
 # Insert cell and track UUID
-cell_id = await agent.insert_cell("notebook.ipynb", "print('hello')")
+cell_id = await tools.insert_cell("notebook.ipynb", "print('hello')")
 
 # Execute and route outputs using UUID
-result = await agent.execute_cell("notebook.ipynb", cell_id=cell_id)
-await agent.update_cell_outputs("notebook.ipynb", cell_id,
-                                result.outputs, result.execution_count)
+result = await tools.execute_cell("notebook.ipynb", cell_id=cell_id)
+# Optionally update source/metadata and re-execute
 ```
 
 ### Authentication Flow
@@ -314,8 +268,8 @@ await agent.update_cell_outputs("notebook.ipynb", cell_id,
 4. Handle token refresh on server restart
 
 ### Execution Parity
-**Key Insight**: Our approach uses the **same kernel execution path** as native JupyterLab
-- WebSocket connection to `/api/kernels/{kernel_id}/channels`
+**Key Insight**: We use the same kernel execution transport as native JupyterLab
+- IOPub channel via `jupyter_client`
 - Identical message format and output handling
 - **Result**: 100% parity with native JupyterLab execution
 
@@ -323,7 +277,7 @@ await agent.update_cell_outputs("notebook.ipynb", cell_id,
 
 ## Success Metrics (Achieved)
 
-1. **✅ Latency**: Cell insertion <50ms via Y-documents
+1. **✅ Latency**: Cell insert/update/delete reflected instantly via RTC
 2. **✅ Rich Outputs**: Full parity with native JupyterLab
 3. **✅ Reliability**: Successful cross-cell targeting
 4. **✅ Real-time**: Instant synchronization across tabs
@@ -334,85 +288,75 @@ await agent.update_cell_outputs("notebook.ipynb", cell_id,
 ## Testing the Agent Tools
 
 ### 📁 **Implementation Location**
-The agent tools are implemented in:
+The tools client and tests are implemented in:
 ```
-jupyter_agent_bridge/tools.py     # ✅ JupyterAgent class + all tools (470 lines)
-test_scripts/test_agent_tools.py  # ✅ Main test suite
-test_scripts/test_complete_flow.py # ✅ End-to-end workflow test
-test_scripts/README.md            # ✅ Test documentation
+jupyter_tools_bridge/tools.py      # ✅ JupyterTools client for server endpoints
+test_scripts/test_ydoc_tools.py    # ✅ Tools E2E (index + id + save)
+test_scripts/README.md             # ✅ Test documentation
 ```
 
 ### 🧪 **Testing Before LLM Integration**
 
-**1. Start JupyterLab in dev mode:**
+**1. Start JupyterLab in dev mode (with collaboration):**
 ```bash
-jupyter lab --dev-mode --extensions-in-dev-mode --port=8890
+jupyter lab --dev-mode --extensions-in-dev-mode --ServerApp.log_level=DEBUG --port=8890 --config=jupyter_server_config.py
 ```
 
-**2. Update the token in test scripts:**
-```python
-# In test_scripts/test_agent_tools.py, line ~23
-token = "YOUR_CURRENT_JUPYTER_TOKEN_HERE"  # Get from JupyterLab logs
-```
+**2. Open the test notebook in the browser:**
+- Open `test_tools.ipynb` to ensure a live YDoc and kernel
 
-**3. Run the main test suite:**
+**3. Run the tools E2E tests:**
 ```bash
-python test_scripts/test_agent_tools.py
+python test_scripts/test_ydoc_tools.py
 ```
 
 **4. Expected test results:**
-- ✅ **Primary Tool Test**: Creates matplotlib plot with rich PNG output
-- ✅ **Markdown Test**: Inserts formatted documentation
-- ✅ **Content Retrieval**: Lists all notebook cells with metadata
-- ✅ **Sequential Execution**: Tests execution count (1, 2, 3...)
-- ✅ **Error Handling**: Validates authentication and recovery
+- ✅ Insert markdown/code (append and targeted)
+- ✅ Update cell (by index and by `cell_id`)
+- ✅ Execute with correct `execution_count` via IOPub `execute_input`
+- ✅ Rich outputs (matplotlib), error outputs, streaming
+- ✅ Delete last and delete by `cell_id`
+- ✅ Force-save endpoint `/api/tools/save` to persist to disk
 
 **5. Verification:**
-- Open `Untitled.ipynb` in JupyterLab
-- Should see new cells appear in real-time (no refresh needed)
-- All outputs should appear in correct cells with rich formatting
-- Real-time updates visible across browser tabs
+- Real-time updates appear instantly in the UI without refresh
 
 ### 🔌 **Ready for LLM Integration**
 
 The tools are now ready for OpenAI Agents or other LLM frameworks:
-
 ```python
-from jupyter_agent_bridge.tools import JupyterAgent
+from jupyter_tools_bridge.tools import JupyterTools
 
-# For LLM agents - automatic token/kernel management
-agent = JupyterAgent("http://127.0.0.1:8890", token="your-token")
-result = await agent.insert_code_and_execute(
+tools = JupyterTools("http://127.0.0.1:8890", token="your-token")
+result = await tools.insert_code_and_execute(
     "analysis.ipynb",
     "import matplotlib.pyplot as plt; plt.plot([1,2,3]); plt.show()"
 )
-
-# Result contains: cell_id, outputs (PNG plot), execution_count, status
-print(f"Created cell {result['cell_id']} with {len(result['outputs'])} outputs")
+print(f"Created cell {result['cell_id']} with {result['execution_count']} and {result['outputs_count']} outputs")
 ```
 
 **Available Tools:**
 - `insert_code_and_execute()` - Primary tool (90% of agent operations)
-- `insert_cell()`, `execute_cell()`, `update_cell_outputs()` - Building blocks
-- `get_cell_content()`, `insert_markdown()` - Convenience tools
+- `insert_cell()`, `execute_cell()`, `update_cell()` - Building blocks
+- `get_notebook_state()` - Snapshot for state-aware decisions
 
 ---
 
 ## Next Steps
 
 ### ✅ COMPLETED
-1. **JupyterAgent Class**: ✅ Implemented with full tool suite (470 lines)
-2. **Real-time Updates**: ✅ Working perfectly with Y-document sync
+1. **JupyterTools Client**: ✅ Implemented with full tool suite
+2. **Real-time Updates**: ✅ Working perfectly with YDoc RTC
 3. **Rich Output Support**: ✅ Matplotlib, HTML, DataFrames all working
 4. **Cross-cell Targeting**: ✅ UUID-based cell identification
 5. **Test Suite**: ✅ Comprehensive testing in `test_scripts/`
-6. **Documentation**: ✅ Complete implementation guide
+6. **Documentation**: ✅ Endpoint and runbook in `docs/JupyterToolsBridge.md`
 
 ### 🔄 PLANNED - Next Phase
 1. **MCP Integration**: Model Context Protocol service (`mcp-snowflake-service/`)
 2. **LangGraph Agent**: Multi-agent workflow orchestration
 3. **Production Deployment**: Docker containers and CI/CD
-4. **Advanced Features**: Multi-notebook operations, batch processing
+4. **Advanced Features**: Move/duplicate, batch ops, metadata schema updates
 
 ---
 
@@ -420,7 +364,7 @@ print(f"Created cell {result['cell_id']} with {len(result['outputs'])} outputs")
 
 ### Why YDoc-First Approach?
 - **Y-documents**: Instant real-time updates for both cell insertion and output updates
-- **Kernel WebSocket**: Direct execution for performance and parity with native JupyterLab
+- **Kernel Execution**: IOPub-driven execution parity with native JupyterLab
 - **Consistent Real-time**: All notebook modifications appear instantly across browser tabs
 - **Collaboration-ready**: Multiple users see changes simultaneously
 
@@ -452,7 +396,6 @@ The LangGraph agent provides intelligent, iterative data analysis capabilities w
 5. **Multi-LLM Support**: Easy switching between GPT-4, Claude, Llama, etc.
 
 ### LangGraph Architecture
-
 ```python
 # packages/jupyter-agent/src/agent/graph.py
 
@@ -499,7 +442,6 @@ class DataAnalysisAgent:
 ```
 
 ### State Management
-
 ```python
 # packages/jupyter-agent/src/agent/state.py
 
@@ -532,9 +474,7 @@ class AnalysisState(TypedDict):
 ```
 
 ### LLM Decision Making
-
 The core `analyze_and_decide` node provides the LLM with complete context:
-
 ```python
 async def analyze_and_decide(self, state: AnalysisState) -> AnalysisState:
     """LLM analyzes everything and decides next action"""
@@ -579,9 +519,7 @@ async def analyze_and_decide(self, state: AnalysisState) -> AnalysisState:
 ```
 
 ### Dynamic Planning with User Interaction
-
 When the LLM decides a plan is needed:
-
 ```python
 async def create_plan(self, state: AnalysisState) -> AnalysisState:
     """Create interactive plan with editable cards"""
@@ -610,9 +548,7 @@ async def create_plan(self, state: AnalysisState) -> AnalysisState:
 ```
 
 ### Status Updates and Transparency
-
 Every node sends real-time updates to the chat:
-
 ```python
 # In analyze_and_decide
 await self.chat_handler.send_status("🔍 Analyzing notebook context...")
@@ -628,7 +564,6 @@ await self.chat_handler.send_status("✅ Code executed successfully")
 ```
 
 ### Efficient Notebook State Management
-
 ```python
 # packages/jupyter-agent/src/context/notebook_state.py
 
@@ -679,7 +614,6 @@ class NotebookStateManager:
 ```
 
 ### Example Flow - Multi-Step Analysis
-
 ```
 User: "Analyze customer churn patterns"
 
@@ -728,9 +662,7 @@ User interrupts: "Focus only on enterprise customers"
 ```
 
 ### Integration with Existing Tools
-
 The LangGraph agent uses the existing JupyterAgent tools:
-
 ```python
 # In execute_code node
 result = await self.jupyter_agent.insert_code_and_execute(
@@ -807,7 +739,6 @@ This architecture provides a sophisticated, LLM-driven agent that can handle com
 6. **Universal Status Streaming**: Every action streams user-friendly status to chat
 
 ### Architecture Overview
-
 ```
 User Message → analyze_and_decide → LLM makes decision WITH status message
                     ↓
@@ -828,7 +759,6 @@ User Message → analyze_and_decide → LLM makes decision WITH status message
 ### Key Components
 
 #### 1. Graph Structure
-
 ```python
 # Simple graph with LLM-driven routing
 workflow = StateGraph(Dict[str, Any])
@@ -860,7 +790,6 @@ workflow.add_conditional_edges(
 ```
 
 #### 2. Universal Status Streaming
-
 ```python
 class LLMDecision(BaseModel):
     """Universal decision structure with status for ANY action"""
@@ -888,7 +817,6 @@ class LLMDecision(BaseModel):
 ```
 
 #### 3. LLM Decision Making with Status
-
 ```python
 async def analyze_and_decide(self, state: Dict[str, Any]) -> Dict[str, Any]:
     """LLM makes decision AND provides status message"""
@@ -965,7 +893,6 @@ async def analyze_and_decide(self, state: Dict[str, Any]) -> Dict[str, Any]:
 ```
 
 #### 4. Node Implementation with Status Awareness
-
 ```python
 async def create_plan(self, state: Dict[str, Any]) -> Dict[str, Any]:
     """Create plan - status already streamed from analyze_and_decide"""
@@ -1031,7 +958,6 @@ async def respond(self, state: Dict[str, Any]) -> Dict[str, Any]:
 ```
 
 #### 5. Tool Architecture with Status
-
 ```python
 # Modular tool definitions
 # packages/jupyter-agent/jupyter_agent_lg/tools/jupyter_tools.py
@@ -1080,7 +1006,6 @@ def create_jupyter_tools(jupyter_agent, notebook_path):
 ```
 
 #### 6. State Management (Simplified)
-
 ```python
 # No complex StateManager needed!
 def create_initial_state(request, notebook_path, conversation_history, model, provider):
@@ -1102,7 +1027,6 @@ def create_initial_state(request, notebook_path, conversation_history, model, pr
 ```
 
 ### Status Message Examples
-
 The LLM generates appropriate status messages for each action:
 
 | Action | Status Message Example |
@@ -1117,7 +1041,6 @@ The LLM generates appropriate status messages for each action:
 ### Critical Implementation Details
 
 #### Sequential Tool Execution
-
 ```python
 # The await keyword ensures sequential execution:
 result = await tool.ainvoke(args)  # BLOCKS until complete
@@ -1137,7 +1060,6 @@ async def insert_code_and_execute(self, ...):
 ```
 
 #### Status Streaming Flow
-
 ```
 User: "Create a plot of sales data"
 
@@ -1179,7 +1101,6 @@ User: "Create a plot of sales data"
 - ✅ Context-aware status messages from LLM
 
 ### Example Flow with Status Streaming
-
 ```
 User: "Analyze the sales data"
 
@@ -1230,7 +1151,6 @@ User: "Analyze the sales data"
 ```
 
 ### File Structure (ACTUAL - Working Implementation)
-
 ```
 packages/jupyter-agent/
 ├── jupyter_agent_lg/              # ✅ Main Python package
