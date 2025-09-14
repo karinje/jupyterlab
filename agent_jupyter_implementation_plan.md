@@ -28,6 +28,30 @@ This implementation delivers agent-controlled notebook editing through a **YDoc-
 
 ---
 
+## Chat ↔ Notebook Targeting (NEW)
+
+- **Default Target**: The active notebook tab (front-most `NotebookPanel`).
+- **How Determined (Frontend)**:
+  - Read `panel.context.path` from the active `NotebookPanel` via `INotebookTracker`.
+  - Include `notebook_path` in the chat request `context` payload.
+- **Backend Behavior**:
+  - The chat handler reads `context.notebook_path` and forwards it to the agent.
+  - The agent and tools operate strictly on that path.
+- **Overrides (Future)**:
+  - Pin chat to a notebook (ignores tab changes) — UI toggle in chat header.
+  - If no active notebook, use last active notebook; otherwise prompt the user.
+- **Rename/Move Robustness**:
+  - Prefer file-id when available (`jupyter_server_fileid`) to track across renames; fall back to path with `context.pathChanged` updates.
+
+### Nice-to-have: Per-notebook Threads
+
+- Maintain conversation threads keyed by `notebook_path` (or file-id).
+- When switching notebooks, auto-restore the last active thread for that notebook.
+- Prevents cross-notebook context bleed and reduces token waste.
+- Not implemented yet; tracked as a future enhancement.
+
+---
+
 ## Current Working Implementation
 
 ### Core Components

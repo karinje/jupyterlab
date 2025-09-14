@@ -9,12 +9,20 @@ import { Signal, ISignal } from '@lumino/signaling';
 export class CellManager implements ICellManager {
   private _notebookTracker: INotebookTracker;
   private _activeNotebookChanged = new Signal<this, void>(this);
+  private _lastNotebookPath: string | null = null;
 
   constructor(notebookTracker: INotebookTracker) {
     this._notebookTracker = notebookTracker;
     
     // Listen for notebook changes
     this._notebookTracker.currentChanged.connect(() => {
+      try {
+        const panel = this._notebookTracker.currentWidget as any;
+        const path = panel && panel.context && panel.context.path;
+        if (path) {
+          this._lastNotebookPath = path as string;
+        }
+      } catch {}
       this._activeNotebookChanged.emit();
     });
   }
@@ -32,6 +40,28 @@ export class CellManager implements ICellManager {
   getActiveNotebook(): any {
     const current = this._notebookTracker.currentWidget;
     return current?.content || null;
+  }
+
+  /**
+   * Get active notebook file path (or null if none)
+   */
+  getActiveNotebookPath(): string | null {
+    const panel = this._notebookTracker.currentWidget as any;
+    console.log('[CellManager] getActiveNotebookPath called');
+    console.log('[CellManager] currentWidget:', panel);
+    console.log('[CellManager] panel.context:', panel?.context);
+    console.log('[CellManager] panel.context.path:', panel?.context?.path);
+    const currentPath = (panel && panel.context && panel.context.path) || null;
+    console.log('[CellManager] resolved currentPath:', currentPath);
+    const lastPath = (this as any)._lastNotebookPath;
+    console.log('[CellManager] lastNotebookPath:', lastPath);
+    // Update cache if we have a current path
+    if (currentPath) {
+      this._lastNotebookPath = currentPath;
+    }
+    const result = currentPath || this._lastNotebookPath;
+    console.log('[CellManager] final result:', result);
+    return result;
   }
 
   /**

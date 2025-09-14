@@ -15,7 +15,7 @@ from ..schemas import (
 logger = logging.getLogger(__name__)
 
 
-def create_jupyter_tools(jupyter_agent, notebook_path: str) -> List[StructuredTool]:
+def create_jupyter_tools(jupyter_tools_client, notebook_path: str) -> List[StructuredTool]:
     """Create Jupyter notebook manipulation tools with correct notebook path"""
 
     # Capture logger in closure scope
@@ -49,17 +49,25 @@ def create_jupyter_tools(jupyter_agent, notebook_path: str) -> List[StructuredTo
                 tool_logger.info(
                     f"🔧 CALLING insert_code_and_execute with notebook_path: {notebook_path}"
                 )
-                result = await jupyter_agent.insert_code_and_execute(
-                    notebook_path, code, position=position
+                # Map position to cell_index per JupyterTools API
+                cell_index = "append" if position == "end" else 0
+                result = await jupyter_tools_client.insert_code_and_execute(
+                    notebook_path=notebook_path, code=code, cell_index=cell_index
                 )
                 tool_logger.info("🔧 ✅ CELL INSERTION COMPLETED")
-                # Safely extract outputs from result
-                outputs = result.get("outputs", []) if isinstance(result, dict) else []
-                return f"Code executed successfully. Result: {_format_outputs(outputs)}"
+                exec_count = result.get("execution_count")
+                outputs_count = result.get("outputs_count")
+                return (
+                    f"Code executed successfully. execution_count={exec_count}, outputs_count={outputs_count}"
+                )
             else:
                 tool_logger.info("🔧 CALLING insert_cell for markdown")
-                result = await jupyter_agent.insert_cell(
-                    notebook_path, code, cell_type="markdown", position=position
+                cell_index = "append" if position == "end" else 0
+                result = await jupyter_tools_client.insert_cell(
+                    notebook_path=notebook_path,
+                    content=code,
+                    cell_type="markdown",
+                    cell_index=cell_index,
                 )
                 tool_logger.info("🔧 ✅ MARKDOWN INSERTION COMPLETED")
                 return f"Markdown cell inserted successfully at position: {position}"
@@ -70,9 +78,14 @@ def create_jupyter_tools(jupyter_agent, notebook_path: str) -> List[StructuredTo
     async def delete_cell(cell_index: int) -> str:
         """Delete a cell from the notebook"""
         try:
-            # JupyterAgent doesn't have delete_cell method yet
-            # This would need to be implemented in the future
-            return "Delete cell functionality not yet implemented in JupyterAgent"
+            result = await jupyter_tools_client.delete_cell(
+                notebook_path=notebook_path, index=cell_index
+            )
+            status = result.get("status", "unknown")
+            deleted_index = result.get("deleted_index", cell_index)
+            if status == "ok" or status == "success":
+                return f"Cell {deleted_index} deleted"
+            return f"Failed to delete cell {deleted_index}: {result}"
         except Exception as e:
             tool_logger.error(f"Error deleting cell: {e}")
             return f"Error: {str(e)}"

@@ -2605,7 +2605,7 @@ __metadata:
   dependencies:
     "@jupyterlab/application": ^4.5.0-alpha.1
     "@jupyterlab/apputils": ^4.6.0-alpha.1
-    "@jupyterlab/chat": ^4.1.0
+    "@jupyterlab/chat": "workspace:*"
     "@jupyterlab/notebook": ^4.5.0-alpha.1
     "@jupyterlab/settingregistry": ^4.5.0-alpha.1
     "@jupyterlab/ui-components": ^4.5.0-alpha.1
@@ -2616,7 +2616,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@jupyterlab/chat@^4.1.0, @jupyterlab/chat@workspace:packages/chat":
+"@jupyterlab/chat@^4.1.0, @jupyterlab/chat@workspace:*, @jupyterlab/chat@workspace:packages/chat":
   version: 0.0.0-use.local
   resolution: "@jupyterlab/chat@workspace:packages/chat"
   dependencies:

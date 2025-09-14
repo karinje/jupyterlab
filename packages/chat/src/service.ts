@@ -127,10 +127,14 @@ export class ChatService implements IChatService {
       const currentCell = this._cellManager.getCurrentCell();
       console.log('getCurrentCell returned:', currentCell);
 
+      // NEW: active notebook path for backend routing
+      const notebookPath = this._cellManager.getActiveNotebookPath?.() || null;
+
       const context = {
         allCells,
         currentCell,
-        totalCells: allCells.length
+        totalCells: allCells.length,
+        notebook_path: notebookPath
       };
 
       console.log('_buildContext returning:', context);
@@ -142,7 +146,8 @@ export class ChatService implements IChatService {
       return {
         allCells: [],
         currentCell: null,
-        totalCells: 0
+        totalCells: 0,
+        notebook_path: null
       };
     }
   }

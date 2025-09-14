@@ -6,7 +6,7 @@ to provide LLMs with complete context without token explosion.
 """
 
 import logging
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import aiohttp
 from datetime import datetime
 
@@ -20,6 +20,10 @@ class NotebookStateManager:
         self.server_url = server_url.rstrip("/")
         self.token = token
         self.headers = {"Authorization": f"token {token}"}
+        # Truncation settings (defaults): no truncation for source; conservative for outputs
+        self.max_source_chars: Optional[int] = None  # None => do not truncate code/markdown
+        self.max_text_plain_chars: int = 1000  # execute_result/display_data text/plain
+        self.max_stream_chars: int = 500  # stream text
 
     async def get_complete_notebook_state(self, notebook_path: str) -> List[Dict]:
         """Get all cells with intelligently summarized outputs"""
@@ -61,27 +65,36 @@ class NotebookStateManager:
             "type": cell.get("cell_type", "unknown"),
             "id": cell.get("id", f"cell-{index}"),
             "execution_count": cell.get("execution_count"),
-            "source": self._summarize_source(cell.get("source", [])),
-            "outputs": self._summarize_outputs(cell.get("outputs", [])),
+            "source": self._summarize_source(cell.get("source", []), self.max_source_chars),
+            "outputs": self._summarize_outputs(
+                cell.get("outputs", []),
+                max_text_plain_chars=self.max_text_plain_chars,
+                max_stream_chars=self.max_stream_chars,
+            ),
             "metadata": cell.get("metadata", {}),
         }
 
         return cell_summary
 
-    def _summarize_source(self, source: List[str] | str) -> str:
-        """Summarize cell source code"""
+    def _summarize_source(self, source: List[str] | str, max_chars: Optional[int] = None) -> str:
+        """Summarize cell source code/markdown; None => no truncation"""
         if isinstance(source, list):
             source_text = "".join(source)
         else:
             source_text = source
 
-        # Truncate very long source code
-        if len(source_text) > 2000:
-            return source_text[:2000] + "\n... [truncated]"
+        if max_chars is not None and len(source_text) > max_chars:
+            return source_text[:max_chars] + "\n... [truncated]"
 
         return source_text
 
-    def _summarize_outputs(self, outputs: List[Dict]) -> List[Dict]:
+    def _summarize_outputs(
+        self,
+        outputs: List[Dict],
+        *,
+        max_text_plain_chars: int = 1000,
+        max_stream_chars: int = 500,
+    ) -> List[Dict]:
         """Smart output summarization to avoid token explosion"""
         summarized = []
 
@@ -89,9 +102,13 @@ class NotebookStateManager:
             output_type = output.get("output_type", "unknown")
 
             if output_type == "execute_result" or output_type == "display_data":
-                summary = self._summarize_data_output(output)
+                summary = self._summarize_data_output(
+                    output, max_text_plain_chars=max_text_plain_chars
+                )
             elif output_type == "stream":
-                summary = self._summarize_stream_output(output)
+                summary = self._summarize_stream_output(
+                    output, max_stream_chars=max_stream_chars
+                )
             elif output_type == "error":
                 summary = self._summarize_error_output(output)
             else:
@@ -101,7 +118,7 @@ class NotebookStateManager:
 
         return summarized
 
-    def _summarize_data_output(self, output: Dict) -> Dict:
+    def _summarize_data_output(self, output: Dict, *, max_text_plain_chars: int) -> Dict:
         """Summarize data outputs (plots, tables, etc.)"""
         data = output.get("data", {})
         summary = {
@@ -116,8 +133,8 @@ class NotebookStateManager:
                 text = "".join(text)
 
             # Truncate long text output
-            if len(text) > 1000:
-                summary["text"] = text[:1000] + "\n... [truncated]"
+            if len(text) > max_text_plain_chars:
+                summary["text"] = text[:max_text_plain_chars] + "\n... [truncated]"
             else:
                 summary["text"] = text
 
@@ -164,7 +181,7 @@ class NotebookStateManager:
 
         return summary
 
-    def _summarize_stream_output(self, output: Dict) -> Dict:
+    def _summarize_stream_output(self, output: Dict, *, max_stream_chars: int) -> Dict:
         """Summarize stream outputs (stdout/stderr)"""
         text = output.get("text", "")
         if isinstance(text, list):
@@ -176,8 +193,8 @@ class NotebookStateManager:
         }
 
         # Truncate long stream output
-        if len(text) > 500:
-            summary["text"] = text[:500] + "\n... [truncated]"
+        if len(text) > max_stream_chars:
+            summary["text"] = text[:max_stream_chars] + "\n... [truncated]"
         else:
             summary["text"] = text
 

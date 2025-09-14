@@ -112,6 +112,11 @@ export interface ICellManager {
   getActiveNotebook(): any;
 
   /**
+   * Get active notebook file path (or null if none)
+   */
+  getActiveNotebookPath(): string | null;
+
+  /**
    * Get cell at current cursor position
    */
   getCurrentCell(): { content: string; type: string; index: number } | null;

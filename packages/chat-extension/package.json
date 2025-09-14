@@ -43,7 +43,7 @@
   "dependencies": {
     "@jupyterlab/application": "^4.5.0-alpha.1",
     "@jupyterlab/apputils": "^4.6.0-alpha.1",
-    "@jupyterlab/chat": "^4.1.0",
+    "@jupyterlab/chat": "workspace:*",
     "@jupyterlab/notebook": "^4.5.0-alpha.1",
     "@jupyterlab/settingregistry": "^4.5.0-alpha.1",
     "@jupyterlab/ui-components": "^4.5.0-alpha.1",
@@ -59,7 +59,10 @@
   },
   "jupyterlab": {
     "extension": true,
-    "schemaDir": "schema"
+    "schemaDir": "schema",
+    "sharedPackages": {
+      "@jupyterlab/chat": false
+    }
   },
   "styleModule": "style/index.js"
 }

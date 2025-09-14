@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level debug to confirm our code is loaded
 logger.info("🔥🔥🔥 JUPYTERLAB CHAT MODULE IMPORTED - NEW VERSION! 🔥🔥🔥")
+print("[chat-backend] module import: JUPYTERLAB CHAT MODULE IMPORTED - NEW VERSION!")
 
 # LangGraph agent is TypeScript-based, runs in frontend
 # Backend just needs to signal that it should be used
@@ -43,6 +44,7 @@ class ConversationManager:
 
     def __init__(self, serverapp):
         self.serverapp = serverapp
+        self._xsrf_token = None
 
     async def load_conversation_history(self, notebook_path: str) -> Dict:
         """Load conversation threads from notebook metadata"""
@@ -55,6 +57,14 @@ class ConversationManager:
             headers = {"Authorization": f"token {token}"}
 
             async with aiohttp.ClientSession() as session:
+                # Ensure XSRF token for subsequent PUT
+                try:
+                    async with session.get(f"{server_url}/lab", headers=headers) as r:
+                        xsrf = r.cookies.get("_xsrf")
+                        if xsrf and xsrf.value:
+                            self._xsrf_token = xsrf.value
+                except Exception:
+                    self._xsrf_token = None
                 async with session.get(
                     f"{server_url}/api/contents/{notebook_path}", headers=headers
                 ) as resp:
@@ -176,9 +186,12 @@ class ConversationManager:
                 # Save notebook
                 save_data = {"type": "notebook", "content": notebook_data["content"]}
 
+                put_headers = dict(headers)
+                if self._xsrf_token:
+                    put_headers["X-XSRFToken"] = self._xsrf_token
                 async with session.put(
                     f"{server_url}/api/contents/{notebook_path}",
-                    headers=headers,
+                    headers=put_headers,
                     json=save_data,
                 ) as resp:
                     if resp.status != 200:
@@ -259,8 +272,9 @@ class ChatOpenAIHandler(APIHandler):
     async def post(self):
         """Handle POST requests to /api/chat/openai"""
         self.log.info(
-            "🚨🚨🚨 CHAT HANDLER CALLED - VERSION 4 - TESTING PYTHON RELOAD! 🚨🚨🚨"
+            "🚨🚨🚨 CHAT HANDLER CALLED - VERSION 4 - TESTING PYTHON RELOAD! 🚨🚨��"
         )
+        print("[chat-backend] ChatOpenAIHandler.post: entered")
         self.log.info("🔍 IMMEDIATE NEXT LINE AFTER CHAT HANDLER CALLED")
         self.log.info("🔍 ENTERING POST METHOD")
         request_start = time.time()
@@ -271,6 +285,7 @@ class ChatOpenAIHandler(APIHandler):
             # Parse request body
             parse_start = time.time()
             self.log.info(f"🔍 RAW REQUEST BODY: {self.request.body}")
+            print(f"[chat-backend] raw body bytes: {len(self.request.body) if self.request.body else 0}")
             body = json.loads(self.request.body)
             self.log.info("🔍 PARSED BODY SUCCESS")
             message = body.get("message", "")
@@ -279,9 +294,38 @@ class ChatOpenAIHandler(APIHandler):
             mcp_servers_config = body.get("mcpServers", {})
             context = body.get("context", {})
             notebook_path = context.get("notebook_path", "Untitled.ipynb")
+            print(f"[chat-backend] notebook_path (from context): {notebook_path}")
             thread_id = body.get("thread_id")
 
-            # NEW: Check if LangGraph mode is requested
+            # SERVER-SIDE FALLBACK: derive path from active sessions if needed
+            if not notebook_path or notebook_path == "Untitled.ipynb":
+                try:
+                    import aiohttp
+
+                    server_url = f"http://127.0.0.1:{self.serverapp.port}"
+                    token = self._get_server_token()
+                    headers = {"Authorization": f"token {token}"}
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(
+                            f"{server_url}/api/sessions", headers=headers
+                        ) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                sessions = data.get("sessions", [])
+                                if len(sessions) == 1:
+                                    notebook_path = sessions[0].get("path", notebook_path)
+                                    self.log.info(
+                                        f"🧭 Fallback notebook_path from sessions: {notebook_path}"
+                                    )
+                                    print(f"[chat-backend] notebook_path (fallback from sessions): {notebook_path}")
+                                else:
+                                    self.log.info(
+                                        f"🧭 Fallback skipped; session count={len(sessions)}"
+                                    )
+                except Exception as e:
+                    self.log.warning(f"Fallback to sessions failed: {e}")
+
+            # Continue as before
             chat_mode = body.get("chat_mode", "auto")  # auto, langgraph, openai_agents
             parse_time = time.time() - parse_start
             self.log.info(f"⚡ Request parsing took {parse_time:.3f}s")
@@ -289,6 +333,7 @@ class ChatOpenAIHandler(APIHandler):
                 f"🎯 USING MODEL: {model}, PROVIDER: {provider}, MODE: {chat_mode}"
             )
             self.log.info(f"🔍 FULL REQUEST BODY: {json.dumps(body, indent=2)}")
+            print(f"[chat-backend] proceeding with notebook_path: {notebook_path}")
 
             # Load conversation history
             history_start = time.time()
@@ -750,3 +795,4 @@ def _load_jupyter_server_extension(server_app):
     ]
     server_app.web_app.add_handlers(".*$", handlers)
     server_app.log.info("JupyterLab Chat extension loaded with status endpoints")
+    print("[chat-backend] extension loaded: handlers registered /api/chat/*")

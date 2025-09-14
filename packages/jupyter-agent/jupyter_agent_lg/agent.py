@@ -16,7 +16,7 @@ from .state import create_initial_state, increment_iteration
 from .context import NotebookStateManager
 from .schemas import LLMDecision
 from .tools import create_jupyter_tools
-from jupyter_agent_bridge.tools import JupyterAgent
+from jupyter_tools_bridge.tools import JupyterTools
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 
@@ -129,7 +129,7 @@ class DataAnalysisAgent:
         # Initialize components
         self.notebook_state_manager = NotebookStateManager(server_url, token)
         self.chat_handler = ChatHandler(server_url, token)
-        self.jupyter_agent = JupyterAgent(server_url, token)
+        self.jupyter_tools_client = JupyterTools(server_url, token)
 
         # Initialize LLMs directly
         self.openai_llm = (
@@ -145,7 +145,7 @@ class DataAnalysisAgent:
 
         # Create tools and LLMs with tools ONCE
         self.jupyter_tools = create_jupyter_tools(
-            self.jupyter_agent, default_notebook_path
+            self.jupyter_tools_client, default_notebook_path
         )
         self.openai_llm_with_tools = (
             self.openai_llm.bind_tools(self.jupyter_tools, parallel_tool_calls=False)
@@ -305,7 +305,7 @@ class DataAnalysisAgent:
         logger.info(f"🔄 Updating notebook path to: {new_notebook_path}")
 
         # Recreate tools with new notebook path
-        self.jupyter_tools = create_jupyter_tools(self.jupyter_agent, new_notebook_path)
+        self.jupyter_tools = create_jupyter_tools(self.jupyter_tools_client, new_notebook_path)
 
         # Rebind tools to LLMs
         if self.openai_llm:
@@ -482,6 +482,11 @@ class DataAnalysisAgent:
             if not llm:
                 raise ValueError(f"No LLM configured for provider: {provider}")
 
+            # DEBUG: Check what tools are available
+            print(f"🔥 TOOLS AVAILABLE: {len(self.jupyter_tools)} tools")
+            for i, tool in enumerate(self.jupyter_tools):
+                print(f"🔥 Tool {i+1}: {tool.name} - {tool.description}")
+
             # Create context prompt (will be used as system message)
             context_prompt = self._create_context_prompt(state)
 
@@ -498,10 +503,14 @@ class DataAnalysisAgent:
                 state["messages"] = []
 
             # Clean up old messages to prevent conversation from getting too long
-            # Keep only the last 6 messages (3 tool call/response pairs)
-            if len(state["messages"]) > 6:
-                state["messages"] = state["messages"][-6:]
-                logger.info("🧹 Cleaned up old messages, keeping last 6")
+            # Optional trimming: keep only the last N messages if configured
+            max_tool_messages = getattr(self, "max_tool_messages", None)
+            if isinstance(max_tool_messages, int) and max_tool_messages > 0:
+                if len(state["messages"]) > max_tool_messages:
+                    state["messages"] = state["messages"][-max_tool_messages:]
+                    logger.info(
+                        f"🧹 Trimmed tool messages to last {max_tool_messages} entries"
+                    )
 
             # DEBUG: Log current messages
             logger.info(f"🔍 Current tool messages in state: {len(state['messages'])}")
@@ -522,7 +531,13 @@ class DataAnalysisAgent:
             )
 
             # Get LLM response
+            print(f"🔥 CALLING LLM WITH {len(conversation_messages)} MESSAGES")
             tool_response = await llm.ainvoke(conversation_messages)
+            print(f"�� LLM RESPONSE TYPE: {type(tool_response)}")
+            print(f"🔥 LLM RESPONSE HAS TOOL_CALLS: {hasattr(tool_response, 'tool_calls')}")
+            if hasattr(tool_response, 'tool_calls'):
+                print(f"🔥 TOOL_CALLS COUNT: {len(tool_response.tool_calls) if tool_response.tool_calls else 0}")
+            print(f"🔥 LLM RESPONSE CONTENT: {tool_response.content[:200] if tool_response.content else 'NO CONTENT'}")
 
             if tool_response.tool_calls:
                 # LLM wants to use tools

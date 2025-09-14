@@ -25,7 +25,7 @@ pip install jupyter-collaboration jupyter-server-ydoc jupyter_ydoc jupyter-clien
 - **Design intent**: These **collaborative shared models** are used for **real-time collaboration _and server-side execution of notebooks_**—this is the official path you’ll build on.
 
 **References**
-- JupyterLab RTC user docs: https://jupyterlab.readthedocs.io/en/stable/user/rtc.html
+- JupyterLab RTC user docs: https://jupyterlab.readthedocs.io/en/latest/user/rtc.html
 - Jupyter Real-Time Collaboration repo: https://github.com/jupyterlab/jupyter-collaboration
 - `jupyter-server-ydoc` (PyPI): https://pypi.org/project/jupyter-server-ydoc/
 - Jupyter YDoc docs (Python/JS APIs): https://jupyter-ydoc.readthedocs.io/
@@ -257,7 +257,7 @@ References:
 - Jupyter Client (execute_request & IOPub): https://jupyter-client.readthedocs.io/en/latest/api/jupyter_client.html
 - nbformat output schema: https://nbformat.readthedocs.io/en/latest/format_description.html
 - Jupyter YDoc (YNotebook): https://jupyter-ydoc.readthedocs.io/
-- JupyterLab RTC docs: https://jupyterlab.readthedocs.io/en/stable/user/rtc.html
+- JupyterLab RTC docs: https://jupyterlab.readthedocs.io/en/latest/user/rtc.html
 
 ---
 

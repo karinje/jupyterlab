@@ -12,9 +12,17 @@ export class CellManager implements ICellManager {
 
   constructor(notebookTracker: INotebookTracker) {
     this._notebookTracker = notebookTracker;
+    (this as any)._lastNotebookPath = null;
 
     // Listen for notebook changes
     this._notebookTracker.currentChanged.connect(() => {
+      try {
+        const panel = this._notebookTracker.currentWidget as any;
+        const path = panel && panel.context && panel.context.path;
+        if (path) {
+          (this as any)._lastNotebookPath = path as string;
+        }
+      } catch {}
       this._activeNotebookChanged.emit();
     });
   }
@@ -32,6 +40,24 @@ export class CellManager implements ICellManager {
   getActiveNotebook(): any {
     const current = this._notebookTracker.currentWidget;
     return current?.content || null;
+  }
+
+  /**
+   * Get active notebook file path (or null if none)
+   */
+  getActiveNotebookPath(): string | null {
+    const panel = this._notebookTracker.currentWidget as any;
+    console.log('[CellManager-2] getActiveNotebookPath called');
+    console.log('[CellManager-2] currentWidget:', panel);
+    console.log('[CellManager-2] panel.context:', panel?.context);
+    console.log('[CellManager-2] panel.context.path:', panel?.context?.path);
+    const currentPath = (panel && panel.context && panel.context.path) || null;
+    console.log('[CellManager-2] resolved currentPath:', currentPath);
+    const lastPath = (this as any)._lastNotebookPath;
+    console.log('[CellManager-2] lastNotebookPath:', lastPath);
+    const result = currentPath || lastPath;
+    console.log('[CellManager-2] final result:', result);
+    return result;
   }
 
   /**

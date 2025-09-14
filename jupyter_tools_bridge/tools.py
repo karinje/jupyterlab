@@ -11,7 +11,7 @@ import asyncio
 import logging
 import uuid
 import aiohttp
-from typing import Dict, Union, Any
+from typing import Dict, Union, Any, Optional
 
 # Initialize logger at module level
 logger = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ class JupyterTools:
         self.token = token
         self.session = None
         self._kernel_cache = {}  # Cache kernel IDs per notebook path
+        self._xsrf_token: Optional[str] = None
 
         logger.info(f"JupyterTools initialized with base_url: {self.base_url}")
 
@@ -50,12 +51,60 @@ class JupyterTools:
         if self.session:
             await self.session.close()
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self, *, xsrf: Optional[str] = None) -> Dict[str, str]:
         """Get headers for API requests."""
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"token {self.token}"
+        if xsrf:
+            headers["X-XSRFToken"] = xsrf
         return headers
+
+    async def _ensure_session(self):
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+
+    async def _ensure_xsrf_cookie(self):
+        """Ensure we have the _xsrf cookie and header value by visiting /lab once."""
+        await self._ensure_session()
+        if self._xsrf_token:
+            logger.info(f"Using cached XSRF token: {self._xsrf_token[:10]}...")
+            print(f"[tools] Using cached XSRF token: {self._xsrf_token[:10]}...")
+            return
+        try:
+            logger.info("Fetching XSRF token from /lab")
+            print("[tools] Fetching XSRF token from /lab")
+            url = f"{self.base_url}/lab"
+            async with self.session.get(url, headers=self._get_headers()) as resp:
+                logger.info(f"GET /lab response status: {resp.status}")
+                print(f"[tools] GET /lab response status: {resp.status}")
+                logger.info(f"Response cookies: {dict(resp.cookies)}")
+                print(f"[tools] Response cookies: {dict(resp.cookies)}")
+                # Try to read cookie from response
+                xsrf_cookie = resp.cookies.get("_xsrf")
+                logger.info(f"_xsrf cookie object: {xsrf_cookie}")
+                print(f"[tools] _xsrf cookie object: {xsrf_cookie}")
+                if xsrf_cookie and xsrf_cookie.value:
+                    self._xsrf_token = xsrf_cookie.value
+                    logger.info(f"✅ Obtained XSRF token: {self._xsrf_token[:10]}...")
+                    print(f"[tools] ✅ Obtained XSRF token: {self._xsrf_token[:10]}...")
+                else:
+                    logger.warning("No _xsrf cookie found in response")
+                    print("[tools] No _xsrf cookie found in response")
+                    # Fallback: try cookie jar
+                    # Try to extract from cookie jar
+                    for cookie in self.session.cookie_jar:
+                        if cookie.key == "_xsrf":
+                            self._xsrf_token = cookie.value
+                            logger.info(f"✅ Found XSRF token in cookie jar: {self._xsrf_token[:10]}...")
+                            print(f"[tools] ✅ Found XSRF token in cookie jar: {self._xsrf_token[:10]}...")
+                            break
+                    else:
+                        logger.warning("❌ No XSRF token found anywhere")
+                        print("[tools] ❌ No XSRF token found anywhere")
+        except Exception as e:
+            logger.error(f"❌ Failed to obtain XSRF token: {e}")
+            print(f"[tools] ❌ Failed to obtain XSRF token: {e}")
 
     async def insert_cell(
         self,
@@ -78,8 +127,8 @@ class JupyterTools:
         Returns:
             Dict with status and cell_id
         """
-        if not self.session:
-            self.session = aiohttp.ClientSession()
+        await self._ensure_session()
+        await self._ensure_xsrf_cookie()
 
         if cell_id is None:
             cell_id = str(uuid.uuid4())
@@ -97,11 +146,23 @@ class JupyterTools:
             f"Inserting {cell_type} cell at index {cell_index} in {notebook_path}"
         )
 
+        headers = self._get_headers(xsrf=self._xsrf_token)
+        print(f"[tools] POST headers: {headers}")
+        print(f"[tools] POST data: {data}")
+
+        # Ensure _xsrf cookie is sent along with header
+        cookies = {'_xsrf': self._xsrf_token} if self._xsrf_token else {}
+        print(f"[tools] POST cookies: {cookies}")
+
         async with self.session.post(
-            url, json=data, headers=self._get_headers()
+            url, json=data, headers=headers, cookies=cookies
         ) as response:
+            logger.info(f"POST response status: {response.status}")
+            print(f"[tools] POST response status: {response.status}")
             if response.status != 200:
                 error_text = await response.text()
+                logger.error(f"POST failed with {response.status}: {error_text}")
+                print(f"[tools] POST failed with {response.status}: {error_text}")
                 raise Exception(f"Failed to insert cell: {error_text}")
 
             result = await response.json()
@@ -129,8 +190,8 @@ class JupyterTools:
         Returns:
             Dict containing execution results
         """
-        if not self.session:
-            self.session = aiohttp.ClientSession()
+        await self._ensure_session()
+        await self._ensure_xsrf_cookie()
 
         url = f"{self.base_url}/api/tools/execute-cell"
         data = {"path": notebook_path, "kernel_id": kernel_id, "stream": stream}
@@ -142,11 +203,17 @@ class JupyterTools:
 
         logger.info(f"Executing cell in {notebook_path} with kernel {kernel_id}")
 
+        # Ensure _xsrf cookie is sent along with header
+        cookies = {'_xsrf': self._xsrf_token} if self._xsrf_token else {}
+        print(f"[tools] EXECUTE POST cookies: {cookies}")
+
         async with self.session.post(
-            url, json=data, headers=self._get_headers()
+            url, json=data, headers=self._get_headers(xsrf=self._xsrf_token), cookies=cookies
         ) as response:
+            print(f"[tools] EXECUTE POST response status: {response.status}")
             if response.status != 200:
                 error_text = await response.text()
+                print(f"[tools] EXECUTE POST failed with {response.status}: {error_text}")
                 raise Exception(f"Failed to execute cell: {error_text}")
 
             result = await response.json()
@@ -174,8 +241,8 @@ class JupyterTools:
         Returns:
             Dict with update status
         """
-        if not self.session:
-            self.session = aiohttp.ClientSession()
+        await self._ensure_session()
+        await self._ensure_xsrf_cookie()
 
         url = f"{self.base_url}/api/tools/update-cell"
         data = {"path": notebook_path}
@@ -190,7 +257,7 @@ class JupyterTools:
             data["metadata"] = metadata
 
         async with self.session.post(
-            url, json=data, headers=self._get_headers()
+            url, json=data, headers=self._get_headers(xsrf=self._xsrf_token), cookies={'_xsrf': self._xsrf_token} if self._xsrf_token else {}
         ) as response:
             if response.status != 200:
                 error_text = await response.text()
@@ -214,8 +281,8 @@ class JupyterTools:
         Returns:
             Dict with deletion status
         """
-        if not self.session:
-            self.session = aiohttp.ClientSession()
+        await self._ensure_session()
+        await self._ensure_xsrf_cookie()
 
         url = f"{self.base_url}/api/tools/delete-cell"
         data = {"path": notebook_path}
@@ -226,7 +293,7 @@ class JupyterTools:
             data["index"] = index
 
         async with self.session.post(
-            url, json=data, headers=self._get_headers()
+            url, json=data, headers=self._get_headers(xsrf=self._xsrf_token), cookies={'_xsrf': self._xsrf_token} if self._xsrf_token else {}
         ) as response:
             if response.status != 200:
                 error_text = await response.text()
@@ -246,14 +313,14 @@ class JupyterTools:
         Returns:
             Dict with notebook state information
         """
-        if not self.session:
-            self.session = aiohttp.ClientSession()
+        await self._ensure_session()
+        await self._ensure_xsrf_cookie()
 
         url = f"{self.base_url}/api/tools/notebook-state"
         data = {"path": notebook_path}
 
         async with self.session.post(
-            url, json=data, headers=self._get_headers()
+            url, json=data, headers=self._get_headers(xsrf=self._xsrf_token), cookies={'_xsrf': self._xsrf_token} if self._xsrf_token else {}
         ) as response:
             if response.status != 200:
                 error_text = await response.text()
@@ -269,8 +336,7 @@ class JupyterTools:
         Returns:
             Dict with list of active sessions
         """
-        if not self.session:
-            self.session = aiohttp.ClientSession()
+        await self._ensure_session()
 
         url = f"{self.base_url}/api/tools/sessions"
 
