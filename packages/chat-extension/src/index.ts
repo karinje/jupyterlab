@@ -137,6 +137,13 @@ const plugin: JupyterFrontEndPlugin<void> = {
     let globalChatService: ChatService | null = null;
     let globalChatManager: ChatManager | null = null;
 
+    // Hard singleton guard across potential multiple activations
+    const __w = (window as any);
+    if (__w.__JLAB_CHAT_SERVICE && __w.__JLAB_CHAT_MANAGER) {
+      globalChatService = __w.__JLAB_CHAT_SERVICE as ChatService;
+      globalChatManager = __w.__JLAB_CHAT_MANAGER as ChatManager;
+    }
+
     const ensureChatService = async (): Promise<{
       chatService: ChatService;
       chatManager: ChatManager;
@@ -144,6 +151,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
       if (!globalChatService || !globalChatManager) {
         globalChatService = new ChatService(llmProvider, cellManager);
         globalChatManager = new ChatManager(globalChatService);
+        __w.__JLAB_CHAT_SERVICE = globalChatService;
+        __w.__JLAB_CHAT_MANAGER = globalChatManager;
 
         // Configure MCP servers for new chat service
         if (settings) {
@@ -159,6 +168,27 @@ const plugin: JupyterFrontEndPlugin<void> = {
               );
             }
           }
+        }
+
+        // Open WS stream for the active notebook
+        try {
+          const path = cellManager.getActiveNotebookPath?.() || null;
+          globalChatService.connectStream?.(path);
+        } catch (e) {
+          console.warn('WS connect on startup failed:', e);
+        }
+
+        // Reconnect WS on notebook change (set once)
+        if (!__w.__JLAB_CHAT_WATCH_BOUND) {
+          notebookTracker.currentChanged.connect(() => {
+            try {
+              const newPath = cellManager.getActiveNotebookPath?.() || null;
+              globalChatService?.connectStream?.(newPath);
+            } catch (e) {
+              console.warn('WS reconnect failed:', e);
+            }
+          });
+          __w.__JLAB_CHAT_WATCH_BOUND = true;
         }
       }
       return { chatService: globalChatService, chatManager: globalChatManager };

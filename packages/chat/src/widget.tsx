@@ -7,12 +7,30 @@ export class ChatManager {
   private _isVisible: boolean = false;
   private _chatService: IChatService;
   private _dialogElement: HTMLDivElement | null = null;
+  private _lastAssistantText: { text: string; ts: number } | null = null;
 
   constructor(chatService: IChatService) {
     this._chatService = chatService;
     // Expose chat manager globally for card interactions
     (window as any).chatManager = this;
     console.log('🔥 ChatManager created with service:', chatService);
+
+    // Subscribe to live plan events if available
+    try {
+      if ((this._chatService as any).planReceived) {
+        (this._chatService as any).planReceived.connect((_: any, payload: any) => {
+          const steps = Array.isArray(payload?.steps) ? payload.steps : [];
+          if (steps.length === 0) return;
+          const content = `Plan:\n` +
+            steps
+              .map((s: any, i: number) => `${i + 1}. ${s.title || 'Step'} — ${s.description || ''}`)
+              .join('\n');
+          this._addMessageToDisplay('assistant', content);
+        });
+      }
+    } catch (e) {
+      console.warn('Failed to bind planReceived:', e);
+    }
   }
 
   private _createDialog(): void {
@@ -190,6 +208,17 @@ export class ChatManager {
     this._chatService.messageAdded.connect((sender: any, message: any) => {
       console.log('🔥 Message received from service:', message);
       if (message.role === 'assistant') {
+        // Dedup identical assistant text within 1s window (WS+HTTP safety net)
+        const now = Date.now();
+        if (
+          this._lastAssistantText &&
+          this._lastAssistantText.text === message.content &&
+          now - this._lastAssistantText.ts < 1000
+        ) {
+          console.log('�� Skipping duplicate assistant message');
+          return;
+        }
+        this._lastAssistantText = { text: message.content, ts: now };
         this._addMessageToDisplay('assistant', message.content);
       }
     });

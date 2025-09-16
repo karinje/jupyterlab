@@ -7,6 +7,8 @@ import {
 } from './tokens';
 import { ISignal, Signal } from '@lumino/signaling';
 import { UUID } from '@lumino/coreutils';
+import { ServerConnection } from '@jupyterlab/services';
+import { URLExt } from '@jupyterlab/coreutils';
 
 /**
  * Chat service implementation
@@ -16,7 +18,13 @@ export class ChatService implements IChatService {
   private _cellManager: ICellManager;
   private _messages: IChatMessage[] = [];
   private _messageAdded = new Signal<this, IChatMessage>(this);
+  private _planReceived = new Signal<this, any>(this);
   private _isDisposed = false;
+  private _ws: WebSocket | null = null;
+  private _wsPath: string | null = null;
+  private _wsConnId: string | null = null;
+  private _reconnectTimer: any = null;
+  private _reconnectAttempts = 0;
 
   constructor(llmProvider: ILLMProvider, cellManager: ICellManager) {
     console.log('ChatService constructor called');
@@ -32,6 +40,10 @@ export class ChatService implements IChatService {
    */
   get messageAdded(): ISignal<this, IChatMessage> {
     return this._messageAdded;
+  }
+
+  get planReceived(): ISignal<this, any> {
+    return this._planReceived;
   }
 
   /**
@@ -52,37 +64,16 @@ export class ChatService implements IChatService {
     this._messageAdded.emit(userMessage);
 
     try {
-      console.log('🚀 About to build context...');
-      // Get context from notebook cells
+      // Build minimal context (only notebook_path for backend routing)
       const context = this._buildContext();
-      console.log('Context built successfully:', context);
-
-      console.log('About to enhance message with context...');
-      // Enhance message with context if it references cells
-      const enhancedMessage = this._enhanceMessageWithContext(message, context);
-      console.log('Message enhanced successfully:', enhancedMessage);
 
       console.log('About to send to LLM...');
       // Send to LLM
-      const response = await this._llmProvider.sendMessage(
-        enhancedMessage,
-        context
-      );
+      const response = await this._llmProvider.sendMessage(message, context);
       console.log('LLM response received:', response);
 
-      // Process any cell operations in the response
-      await this._processCellOperations(response);
-
-      // Add assistant message
-      const assistantMessage: IChatMessage = {
-        id: UUID.uuid4(),
-        role: 'assistant',
-        content: response,
-        timestamp: new Date()
-      };
-
-      this._messages.push(assistantMessage);
-      this._messageAdded.emit(assistantMessage);
+      // Do not add assistant message from HTTP response; rely solely on WS stream
+      console.log('[CHAT] HTTP return ignored; waiting for WS broadcast');
     } catch (error) {
       console.error('Error in ChatService.sendMessage:', error);
       // Add error message
@@ -117,118 +108,16 @@ export class ChatService implements IChatService {
    * Build context from current notebook state
    */
   private _buildContext(): any {
-    console.log('ChatService._buildContext called');
     try {
-      console.log('About to call getAllCells...');
-      const allCells = this._cellManager.getAllCells();
-      console.log('getAllCells returned:', allCells);
-
-      console.log('About to call getCurrentCell...');
-      const currentCell = this._cellManager.getCurrentCell();
-      console.log('getCurrentCell returned:', currentCell);
-
-      // NEW: active notebook path for backend routing
       const notebookPath = this._cellManager.getActiveNotebookPath?.() || null;
-
-      const context = {
-        allCells,
-        currentCell,
-        totalCells: allCells.length,
-        notebook_path: notebookPath
-      };
-
-      console.log('_buildContext returning:', context);
-      return context;
+      return { notebook_path: notebookPath };
     } catch (error) {
-      console.error('Error in ChatService._buildContext:', error);
-      console.warn('Failed to build notebook context:', error);
-      // Return safe fallback context
-      return {
-        allCells: [],
-        currentCell: null,
-        totalCells: 0,
-        notebook_path: null
-      };
+      console.warn('Failed to build minimal context:', error);
+      return { notebook_path: null };
     }
   }
 
-  /**
-   * Enhance message with notebook context
-   */
-  private _enhanceMessageWithContext(message: string, context: any): string {
-    try {
-      let enhancedMessage = message;
-
-      // Add context if user is asking about cells
-      if (this._mentionsCells(message)) {
-        enhancedMessage += '\n\nCurrent notebook state:\n';
-        enhancedMessage += `Total cells: ${context.totalCells || 0}\n`;
-
-        if (context.currentCell && context.currentCell.content !== undefined) {
-          enhancedMessage += `Current cell (${context.currentCell.index}): ${context.currentCell.type}\n`;
-          enhancedMessage += `Content: ${context.currentCell.content}\n`;
-        }
-
-        // Add cell contents if specifically requested
-        if (
-          message.toLowerCase().includes('all cells') ||
-          message.toLowerCase().includes('show cells')
-        ) {
-          enhancedMessage += '\nAll cells:\n';
-          if (Array.isArray(context.allCells)) {
-            context.allCells.forEach((cell: any, index: number) => {
-              if (cell && cell.content !== undefined) {
-                enhancedMessage += `Cell ${index} (${
-                  cell.type
-                }): ${cell.content.substring(0, 200)}${
-                  cell.content.length > 200 ? '...' : ''
-                }\n`;
-              }
-            });
-          }
-        }
-
-        // Pattern matching removed - backend now handles all notebook operations via function tools
-      }
-
-      return enhancedMessage;
-    } catch (error) {
-      console.warn('Failed to enhance message with context:', error);
-      return message; // Return original message if context enhancement fails
-    }
-  }
-
-  /**
-   * Check if message mentions cells
-   */
-  private _mentionsCells(message: string): boolean {
-    const cellMentions = [
-      'cell',
-      'code',
-      'execute',
-      'run',
-      'insert',
-      'delete',
-      'modify'
-    ];
-    const lowerMessage = message.toLowerCase();
-    return cellMentions.some(mention => lowerMessage.includes(mention));
-  }
-
-  // Cell modification detection removed - backend handles all operations via function tools
-
-  /**
-   * Process cell operations from LLM response
-   * NOTE: Cell operations now handled by backend function tools - no frontend processing needed
-   */
-  private async _processCellOperations(response: string): Promise<void> {
-    // Cell operations now handled by backend function tools - no processing needed
-    return;
-  }
-
-  // Pattern matching methods removed - backend handles all operations via function tools
-
-  // All pattern matching methods removed - backend handles operations via function tools
+  // Frontend no longer enhances or inspects messages; backend owns execution and WS streaming
 
   /**
    * Set LLM provider
@@ -261,6 +150,7 @@ export class ChatService implements IChatService {
 
     this._isDisposed = true;
     this._messages = [];
+    this.disconnectStream?.();
     Signal.clearData(this);
   }
 
@@ -282,5 +172,123 @@ export class ChatService implements IChatService {
    */
   getMCPServerCount(): number {
     return this._llmProvider.getMCPServerCount?.() || 0;
+  }
+
+  connectStream(notebookPath: string | null): void {
+    try {
+      const path = notebookPath || '*';
+      if (this._ws && this._wsPath === path) {
+        console.log('[WS] already connected for path', path, 'connId=', this._wsConnId);
+        return;
+      }
+      this.disconnectStream();
+
+      const settings = ServerConnection.makeSettings();
+      let wsUrl = URLExt.join(settings.wsUrl, 'api', 'chat', 'stream');
+      const params: string[] = [`notebook_path=${encodeURIComponent(path)}`];
+      if (settings.appendToken && settings.token) {
+        params.push(`token=${encodeURIComponent(settings.token)}`);
+      }
+      wsUrl = wsUrl + `?${params.join('&')}`;
+
+      const ws = new settings.WebSocket(wsUrl);
+      this._ws = ws;
+      this._wsPath = path;
+      this._wsConnId = UUID.uuid4();
+      console.log('[WS] open path=', path, 'connId=', this._wsConnId, 'url=', wsUrl);
+      this._bindWS(ws);
+    } catch (error) {
+      console.error('WS connect error:', error);
+      this._scheduleReconnect();
+    }
+  }
+
+  disconnectStream(): void {
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+    if (this._ws) {
+      try {
+        this._ws.onclose = null;
+        this._ws.onerror = null;
+        this._ws.onmessage = null;
+        this._ws.close();
+      } catch (e) {
+        /* ignore */
+      }
+      this._ws = null;
+    }
+    this._wsPath = null;
+    this._reconnectAttempts = 0;
+  }
+
+  private _bindWS(ws: WebSocket): void {
+    ws.onmessage = evt => {
+      try {
+        const data = JSON.parse(evt.data);
+        const type = data?.type;
+        const payload = data?.payload || {};
+        const toolCallId = (data && (data.tool_call_id || (data as any)["tool_call_id"])) || null;
+        const threadId = (data && (data.thread_id || (data as any)["thread_id"])) || null;
+        console.log('[WS msg]', 'connId=', this._wsConnId, 'type=', type, 'len=', (payload?.content?.length || 0));
+
+        if (type === 'message') {
+          const assistantMessage: IChatMessage = {
+            id: UUID.uuid4(),
+            role: (payload.role as any) || 'assistant',
+            content: String(payload.content ?? ''),
+            timestamp: new Date(),
+            metadata: { wsConnId: this._wsConnId, toolCallId, threadId }
+          };
+          console.log('[WS add]', 'connId=', this._wsConnId, 'toolCallId=', toolCallId, 'threadId=', threadId);
+          this._messages.push(assistantMessage);
+          this._messageAdded.emit(assistantMessage);
+        } else if (type === 'status') {
+          const msg = String(payload.message ?? '');
+          if (!msg) return;
+          const statusMessage: IChatMessage = {
+            id: UUID.uuid4(),
+            role: 'assistant',
+            content: `⏳ ${msg}`,
+            timestamp: new Date(),
+            metadata: { status: payload.status || 'working' }
+          };
+          this._messages.push(statusMessage);
+          this._messageAdded.emit(statusMessage);
+        } else if (type === 'plan') {
+          this._planReceived.emit(payload);
+        }
+      } catch (e) {
+        console.warn('Bad WS message:', e);
+      }
+    };
+
+    const onCloseOrError = () => {
+      this._ws = null;
+      console.log('[WS] closed connId=', this._wsConnId);
+      this._wsConnId = null;
+      this._scheduleReconnect();
+    };
+
+    ws.onclose = onCloseOrError;
+    ws.onerror = onCloseOrError;
+  }
+
+  private _scheduleReconnect(): void {
+    if (this._isDisposed) return;
+    const attempts = Math.min(this._reconnectAttempts + 1, 6);
+    this._reconnectAttempts = attempts;
+    const delay = 500 * attempts + Math.floor(Math.random() * 250);
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+    }
+    const path = this._wsPath;
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      if (!this._isDisposed && path) {
+        this.connectStream(path);
+      }
+    }, delay);
   }
 }

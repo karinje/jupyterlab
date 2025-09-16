@@ -1,7 +1,7 @@
 {
   "name": "@jupyterlab/chat-extension",
-  "version": "4.1.0",
-  "description": "JupyterLab - Chat extension",
+  "version": "4.1.3",
+  "description": "JupyterLab - Chat Extension",
   "keywords": [
     "jupyter",
     "jupyterlab",
@@ -43,7 +43,7 @@
   "dependencies": {
     "@jupyterlab/application": "^4.5.0-alpha.1",
     "@jupyterlab/apputils": "^4.6.0-alpha.1",
-    "@jupyterlab/chat": "workspace:*",
+    "@jupyterlab/chat": "^4.1.0",
     "@jupyterlab/notebook": "^4.5.0-alpha.1",
     "@jupyterlab/settingregistry": "^4.5.0-alpha.1",
     "@jupyterlab/ui-components": "^4.5.0-alpha.1",

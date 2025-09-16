@@ -667,3 +667,123 @@ python test_scripts/test_ydoc_tools.py
 ### Current Integration Status
 - Jupyter tools are working end-to-end (insert/update/execute/delete/save) with tests and docs updated.
 - We also built a working version of the agent, but integration of the agent with these Jupyter tools and chat still needs to be worked on (loose ends since we redid tools; some links may be broken).
+
+### 🧩 Productization Plan (Installable Extensions + Combined Distribution)
+
+#### Goals
+- Ship each component as a standalone, installable extension (works on any JupyterLab 4.x).
+- Also ship a combined “AI Edition” distribution that includes all components preinstalled and pre-enabled.
+- Zero-Node install path for end users via federated labextensions bundled in Python wheels.
+
+#### Components to Package
+- Python server extensions (PyPI wheels):
+  - `jupyter-tools-bridge` (server-only)
+  - `jupyterlab-chat` (server handlers for chat + WS)
+  - `jupyter-agent-lg` (LangGraph agent backend)
+- Frontend JupyterLab federated extensions (bundled inside Python wheels):
+  - `@jupyterlab/chat-extension`
+
+#### Packaging Details (Python wheels)
+- Each server package should include an autoload JSON so routes are registered automatically on install:
+  - Wheel data file path: `share/jupyter/jupyter_server_config.d/<package>.json`
+  - Example content:
+    ```json
+    { "ServerApp": { "jpserver_extensions": { "jupyter_tools_bridge": true } } }
+    ```
+  - For `jupyterlab_chat`, enable `{ "jupyterlab_chat": true }`.
+- Bundle the frontend federated extension into the `jupyterlab-chat` wheel (or a dedicated wheel) under:
+  - `share/jupyter/labextensions/@jupyterlab/chat-extension/*`
+  - Ensure `package.json` contains:
+    ```json
+    {
+      "jupyterlab": {
+        "extension": true,
+        "sharedPackages": {
+          "@jupyterlab/chat": false
+        }
+      }
+    }
+    ```
+  - This forces the host to use the local library when needed and avoids MF conflicts.
+
+#### Install Matrix (Users)
+- Individual deployment (add to any JupyterLab ≥ 4.x):
+  ```bash
+  pip install jupyter-tools-bridge jupyterlab-chat jupyter-agent-lg
+  # No Node required thanks to federated extension assets in the wheels
+  jupyter server extension list  # should show jupyter_tools_bridge and jupyterlab_chat OK
+  jupyter lab
+  ```
+- Combined distribution (all-in-one):
+  - Create meta-package: `jupyterlab-ai-edition` with:
+    - `install_requires=["jupyterlab>=4.4", "jupyter-tools-bridge", "jupyterlab-chat", "jupyter-agent-lg"]`
+    - Optionally bundle settings profiles and a welcome page.
+  - Users do:
+    ```bash
+    pip install jupyterlab-ai-edition
+    jupyter lab
+    ```
+
+#### CI / Release Pipeline
+- Build and publish wheels for:
+  - `jupyter-tools-bridge` (includes autoload JSON)
+  - `jupyterlab-chat` (includes autoload JSON + labextensions/@jupyterlab/chat-extension assets)
+  - `jupyter-agent-lg`
+  - `jupyterlab-ai-edition` meta-package
+- Smoke test in a clean venv:
+  ```bash
+  python -m venv .venv && source .venv/bin/activate
+  pip install jupyterlab-ai-edition
+  jupyter server extension list | grep -E "jupyterlab_chat|jupyter_tools_bridge"
+  python - << 'PY'
+  import requests; import sys
+  try:
+      r = requests.options('http://127.0.0.1:8888/api/chat/openai', timeout=1)
+  except Exception:
+      pass
+  print('OK')
+  PY
+  ```
+
+#### Dev vs Prod Workflows (robust)
+- Prod: no dev-mode, no webpack; rely on federated assets in wheels.
+- Dev (two options):
+  1) Federated dev
+     - `pip install -e jupyter-tools-bridge -e packages/chat -e packages/jupyter-agent`
+     - `jlpm --cwd packages/chat-extension build`
+     - `jupyter lab --dev-mode --extensions-in-dev-mode`
+  2) Dev app shell (monorepo dev_mode)
+     - `cd dev_mode && npm install --legacy-peer-deps && npm run build`
+     - `jupyter lab --dev-mode --extensions-in-dev-mode --app-dir=$(pwd)/dev_mode`
+
+- Dev preflight (scriptable):
+  ```bash
+  # Ensure correct Python for server packages
+  PYBIN=$(head -1 $(which jupyter) | cut -c3-)
+  "$PYBIN" -c "import jupyter_tools_bridge, jupyterlab_chat"
+
+  # Ensure dev shell when using --dev-mode
+  test -f dev_mode/static/index.html || (cd dev_mode && npm run build)
+  ```
+
+#### Autoload & Route Guarantees
+- Autoload JSON ensures server extensions are enabled automatically.
+- On startup, verify routes via logs or OPTIONS:
+  - `/api/tools/insert-cell`, `/api/tools/execute-cell` (bridge)
+  - `/api/chat/openai`, `/api/chat/status`, `/api/chat/message`, `/api/chat/stream` (chat)
+
+#### Versioning & Compatibility
+- Pin minimal supported JupyterLab (e.g., `>=4.4`), Lumino/Services versions in `package.json`/`pyproject.toml`.
+- Use SemVer across Python and JS; publish pre-releases for alpha.
+
+#### Ops / Telemetry (later)
+- Optional: add a health endpoint `/api/chat/health` and `/api/tools/health`.
+- Add basic metrics hooks (request counts, WS connections) guarded by settings.
+
+#### Deliverables Checklist
+- [ ] Wheels publishable to PyPI for: tools bridge, chat (server+fed ext), agent
+- [ ] Meta-package `jupyterlab-ai-edition` with pinned versions
+- [ ] Autoload JSON in each server wheel
+- [ ] CI smoke tests (clean venv launch, extension list OK, routes reachable)
+- [ ] Dev preflight script committed (`scripts/dev_start.sh`)
+- [ ] README updates: individual install + AI edition install

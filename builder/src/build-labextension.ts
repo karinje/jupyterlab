@@ -71,14 +71,16 @@ commander
       devtool,
       watchMode: options.watch
     });
-    const compiler = webpack(config);
+    const compiler: any = webpack(config);
 
     let lastHash: string | null = null;
 
     function compilerCallback(err: any, stats: any) {
       if (!options.watch || err) {
         // Do not keep cache anymore
-        compiler.purgeInputFileSystem();
+        if (compiler && typeof compiler.purgeInputFileSystem === 'function') {
+          compiler.purgeInputFileSystem();
+        }
       }
 
       if (err) {
@@ -109,27 +111,27 @@ commander
     }
 
     if (options.watch) {
-      compiler.hooks.watchRun.tap('WebpackInfo', () => {
+      compiler?.hooks?.watchRun?.tap('WebpackInfo', () => {
         console.error('\nWatch Compilation starting…\n');
       });
-      compiler.hooks.done.tap('WebpackInfo', () => {
+      compiler?.hooks?.done?.tap('WebpackInfo', () => {
         console.error('\nWatch Compilation finished\n');
       });
     } else {
-      compiler.hooks.run.tap('WebpackInfo', () => {
+      compiler?.hooks?.run?.tap('WebpackInfo', () => {
         console.error('\nCompilation starting…\n');
       });
-      compiler.hooks.done.tap('WebpackInfo', () => {
+      compiler?.hooks?.done?.tap('WebpackInfo', () => {
         console.error('\nCompilation finished\n');
       });
     }
 
     if (options.watch) {
-      compiler.watch(config[0].watchOptions || {}, compilerCallback);
+      compiler.watch?.(config[0].watchOptions || {}, compilerCallback);
       console.error('\nwebpack is watching the files…\n');
     } else {
-      compiler.run((err: any, stats: any) => {
-        if (compiler.close) {
+      compiler.run?.((err: any, stats: any) => {
+        if (compiler && compiler.close) {
           compiler.close((err2: any) => {
             compilerCallback(err || err2, stats);
           });

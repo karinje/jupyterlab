@@ -17,6 +17,261 @@ A single-tool-per-turn LangGraph agent drives notebook operations with strict to
 
 ---
 
+## 🚨 CRITICAL: Dev Mode Setup & Troubleshooting Guide
+
+### **Complete Working Setup (PROVEN)**
+
+This section documents the exact process to get chat + WebSocket + agent working in dev mode without duplicate messages or missing functionality.
+
+#### **1. Required JupyterLab Flags (CRITICAL)**
+```bash
+jupyter lab --dev-mode --extensions-in-dev-mode --ServerApp.log_level=DEBUG --port=8890 --config=jupyter_server_config.py --no-browser
+```
+
+**Why each flag is essential:**
+- `--dev-mode` - Loads from dev bundles in `dev_mode/static/`
+- `--extensions-in-dev-mode` - **CRITICAL**: Enables `jupyter_tools_bridge` extension for notebook operations
+- `--config=jupyter_server_config.py` - Enables collaboration (`jupyter_server_ydoc`) and chat backend (`jupyterlab_chat`)
+- `--port=8890` - Avoids conflicts with other instances
+- `--ServerApp.log_level=DEBUG` - Shows detailed logs for debugging
+
+**Missing `--extensions-in-dev-mode` causes:**
+- Agent can send chat messages but cannot execute notebook operations
+- XSRF errors when trying to insert/execute cells
+- Status messages work but no actual code execution
+
+#### **2. Backend Python Package Installation**
+```bash
+# Install backend packages in correct order
+pip install -e jupyter_tools_bridge
+pip install -e packages/chat
+pip install -e packages/jupyter-agent
+```
+
+**Verification:**
+```bash
+jupyter server extension list | grep -E "jupyterlab_chat|jupyter_tools_bridge"
+# Should show both as enabled
+```
+
+#### **3. Frontend Bundle Build Process**
+```bash
+# Build chat packages
+cd packages/chat && jlpm build
+cd ../chat-extension && jlpm build
+
+# CRITICAL: Rebuild dev_mode bundles (this was the key missing step)
+cd ../../dev_mode && npm run build
+```
+
+**Why dev_mode build is critical:**
+- JupyterLab dev mode loads bundles from `dev_mode/static/`, not individual package `lib/` directories
+- Without this, frontend changes never reach the browser
+- This was the root cause of duplicate messages persisting
+
+#### **4. WebSocket Duplicate Message Fix**
+
+**Problem**: Frontend was adding assistant messages twice - once from HTTP response and once from WebSocket broadcast.
+
+**Solution in `packages/chat/src/service.ts`:**
+```typescript
+async sendMessage(message: string): Promise<void> {
+    // ... add user message ...
+    
+    try {
+        const context = this._buildContext();
+        const response = await this._llmProvider.sendMessage(message, context);
+        
+        // ✅ CRITICAL FIX: Do not add assistant message from HTTP response
+        // Rely solely on WebSocket broadcast for assistant messages
+        console.log('[CHAT] HTTP return ignored; waiting for WS broadcast');
+    } catch (error) {
+        // ... handle errors ...
+    }
+}
+```
+
+**Additional safeguards:**
+- Client-side deduplication in `packages/chat/src/widget.tsx` (1-second window)
+- Server-side deduplication in `ChatBroadcaster` (2-second window for identical content)
+- WebSocket connection management with proper cleanup
+
+#### **5. WebSocket Implementation Details**
+
+**Backend (`packages/chat/jupyterlab_chat/__init__.py`):**
+```python
+class ChatBroadcaster:
+    def broadcast(self, event: dict) -> None:
+        # Deliver to either targeted subscribers OR global subscribers, never both
+        notebook_path = event.get("notebook_path") or "*"
+        if notebook_path and notebook_path != "*":
+            targets = list(self._subscribers.get(notebook_path, set()))
+        else:
+            targets = list(self._subscribers.get("*", set()))
+```
+
+**Frontend (`packages/chat/src/service.ts`):**
+```typescript
+connectStream(notebookPath: string | null): void {
+    const path = notebookPath || '*';
+    const settings = ServerConnection.makeSettings();
+    let wsUrl = URLExt.join(settings.wsUrl, 'api', 'chat', 'stream');
+    const params: string[] = [`notebook_path=${encodeURIComponent(path)}`];
+    if (settings.appendToken && settings.token) {
+        params.push(`token=${encodeURIComponent(settings.token)}`);
+    }
+    wsUrl = wsUrl + `?${params.join('&')}`;
+    
+    const ws = new settings.WebSocket(wsUrl);
+    this._bindWS(ws);
+}
+```
+
+#### **6. Chat Extension Singleton Fix**
+
+**Problem**: Multiple chat service instances created, leading to duplicate WebSocket connections.
+
+**Solution in `packages/chat-extension/src/index.ts`:**
+```typescript
+// Hard singleton guard across potential multiple activations
+const __w = (window as any);
+if (__w.__JLAB_CHAT_SERVICE && __w.__JLAB_CHAT_MANAGER) {
+    globalChatService = __w.__JLAB_CHAT_SERVICE as ChatService;
+    globalChatManager = __w.__JLAB_CHAT_MANAGER as ChatManager;
+}
+
+const ensureChatService = async (): Promise<{chatService: ChatService; chatManager: ChatManager;}> => {
+    if (!globalChatService || !globalChatManager) {
+        globalChatService = new ChatService(llmProvider, cellManager);
+        globalChatManager = new ChatManager(globalChatService);
+        __w.__JLAB_CHAT_SERVICE = globalChatService;
+        __w.__JLAB_CHAT_MANAGER = globalChatManager;
+        
+        // Connect WebSocket to active notebook
+        const path = cellManager.getActiveNotebookPath?.() || null;
+        globalChatService.connectStream?.(path);
+        
+        // Set up notebook change listener (once only)
+        if (!__w.__JLAB_CHAT_WATCH_BOUND) {
+            notebookTracker.currentChanged.connect(() => {
+                const newPath = cellManager.getActiveNotebookPath?.() || null;
+                globalChatService?.connectStream?.(newPath);
+            });
+            __w.__JLAB_CHAT_WATCH_BOUND = true;
+        }
+    }
+    return { chatService: globalChatService, chatManager: globalChatManager };
+};
+```
+
+#### **7. Agent Recursion Fix**
+
+**Problem**: LangGraph agent hit recursion limit when user said "hi" (no tool calls generated).
+
+**Solution in `packages/jupyter-agent/jupyter_agent_lg/agent.py`:**
+```python
+async def execute_tools(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    # ... existing code ...
+    
+    route = "continue"
+    if name == "RespondToUser":  # ✅ FIX: End on ANY RespondToUser, not just completion intent
+        route = "end"
+        preserved_state["final_result"] = args.get("message", "")
+    
+    preserved_state["route_after_tools"] = route
+    # ... existing code ...
+```
+
+#### **8. Browser Cache Busting**
+
+**Problem**: Browser loads stale JavaScript bundles despite rebuilds.
+
+**Solutions:**
+1. **Version bump** in `packages/chat-extension/package.json` (e.g., `4.1.0` → `4.1.3`)
+2. **Hard refresh** with DevTools cache disabled (`Cmd+Shift+R` on Mac)
+3. **Rebuild dev_mode** after any frontend changes: `cd dev_mode && npm run build`
+
+#### **9. Complete Restart Procedure**
+
+When making changes, follow this exact sequence:
+
+```bash
+# 1. Kill existing JupyterLab
+pkill -f "jupyter-lab" || true
+
+# 2. Rebuild frontend if changed
+cd packages/chat && jlpm build
+cd ../chat-extension && jlpm build
+cd ../../dev_mode && npm run build
+
+# 3. Reinstall backend if changed
+pip install -e packages/chat
+
+# 4. Start with correct flags
+jupyter lab --dev-mode --extensions-in-dev-mode --ServerApp.log_level=DEBUG --port=8890 --config=jupyter_server_config.py --no-browser
+
+# 5. In browser: Hard refresh with cache disabled
+# 6. Test: Open notebook, open chat, send message
+```
+
+#### **10. Verification Checklist**
+
+**✅ Backend working:**
+```bash
+# Check extensions loaded
+grep "jupyterlab_chat.*successfully loaded" jlab.log
+grep "jupyter_tools_bridge" jlab.log
+
+# Check WebSocket broadcasts
+grep "\[WS\] broadcast" jlab.log
+```
+
+**✅ Frontend working (browser console):**
+```javascript
+// Should see new version logs
+"🌟🌟🌟 CHAT EXTENSION ACTIVATING - NEW VERSION! 🌟🌟🌟"
+
+// Should see WebSocket logs, NOT old HTTP logs
+"[CHAT] HTTP return ignored; waiting for WS broadcast"
+"[WS] open path= Untitled.ipynb"
+
+// Should NOT see old logs
+❌ "About to enhance message with context..."
+❌ "LLM response received:"
+```
+
+**✅ Agent working:**
+```bash
+# Check tool execution
+grep "🛠️ \[tools\] executing name=" jlab.log
+
+# Check notebook operations
+grep "insert_and_execute_cell" jlab.log
+
+# Should see only one assistant message per request in chat UI
+```
+
+#### **11. Common Failure Modes & Fixes**
+
+| **Problem** | **Symptom** | **Root Cause** | **Fix** |
+|-------------|-------------|----------------|---------|
+| **Duplicate messages** | Two identical assistant responses | Frontend adds both HTTP + WS response | Remove HTTP response handling in `service.ts` |
+| **No notebook operations** | Status messages but no code execution | Missing `--extensions-in-dev-mode` flag | Add flag and restart JupyterLab |
+| **Old code running** | Console shows old logs despite changes | Stale dev_mode bundles | `cd dev_mode && npm run build` |
+| **Agent recursion error** | "Recursion limit of 25 reached" | No tool calls for simple messages | Change `execute_tools` to end on any `RespondToUser` |
+| **WebSocket connection fails** | No real-time updates | Token/auth issues | Check `ServerConnection.makeSettings()` token handling |
+| **XSRF 403 errors** | Tools fail with auth errors | Missing collaboration extension | Ensure `--config=jupyter_server_config.py` |
+
+#### **12. Production Deployment Notes**
+
+For production (non-dev mode):
+- Build federated extensions: `cd packages/chat-extension && jlpm build:prod`
+- Install as proper extensions: `jupyter labextension install @jupyterlab/chat-extension`
+- Use standard flags: `jupyter lab --port=8890 --config=jupyter_server_config.py`
+- No need for `--dev-mode` or `--extensions-in-dev-mode`
+
+---
+
 ## Philosophy & Design Principles
 
 - **Determinism over cleverness**: One tool per turn keeps routing and execution predictable, eliminates ordering hazards, and avoids OpenAI protocol 400s.
@@ -216,6 +471,59 @@ analyze_and_decide (continue) or END (if RespondToUser with intent="completion")
   - Render events live; de-duplicate via `tool_call_id` + timestamp; group tool_started/finished.
   - Persist is already handled server-side; UI only displays.
 - Fallback: keep SSE/NDJSON as a secondary option if WS not available (not prioritized now).
+
+#### WebSocket Implementation Plan (detailed)
+- [x] Backend: Add `ChatStreamHandler` (WS) in `packages/chat/jupyterlab_chat/__init__.py`
+  - Path: `/api/chat/stream`
+  - Query params: `notebook_path` (required), `thread_id` (optional), `token` (optional)
+  - Lifecycle: `open()` subscribes, `on_close()` unsubscribes, no `on_message`
+  - Security: `check_origin` restricts to same-origin; validate token against `serverapp.token` if present
+- [x] Backend: Add `ChatBroadcaster` singleton
+  - Map `notebook_path -> Set[WS]`; `subscribe`, `unsubscribe`, `broadcast(event)`
+  - Prune dead sockets on send errors; log with minimal PII
+- [x] Backend: Wire broadcaster in existing handlers
+  - `ChatStatusHandler.post`: after persist, broadcast `{type:"status", notebook_path, timestamp, payload:{status,message}}`
+  - `ChatMessageHandler.post`: after persist, broadcast `{type:"message", notebook_path, timestamp, payload:{role,content}}`
+  - `ChatOpenAIHandler`: optionally emit `tool_started/tool_finished` via status pathway
+- [x] Backend: Register WS route in `_load_jupyter_server_extension`
+- [x] Agent: Ensure `ChatHandler.send_status/send_message` include `notebook_path`; add optional `status_type: tool_started|tool_finished`
+- [x] Frontend: ChatService websocket client
+  - Add `connectStream(notebookPath: string)` and `disconnectStream()` in `packages/chat/src/service.ts`
+  - Create WS with `ServerConnection.makeSettings().wsUrl + '/api/chat/stream?notebook_path=...'` (+ `token` when `appendToken`)
+  - Handle `onmessage`: route by `event.type`
+    - `message`: push as assistant/user message via existing `_messageAdded`
+    - `status`: push lightweight assistant/system bubble (e.g., prefix icons) or expose a `statusReceived` signal
+    - `plan`: expose `planReceived` signal with steps
+  - Implement auto-reconnect with capped backoff; rebind on `notebookPath` change
+- [x] Frontend: Hook to active notebook
+  - In `packages/chat-extension/src/index.ts`, on activation and `notebookTracker.currentChanged`, call `chatService.connectStream(activePath)`
+  - Disconnect on deactivate/`dispose()`
+- [x] Frontend: UI rendering for plan/status
+  - `packages/chat/src/widget.tsx`: subscribe to `planReceived` to render plan cards; consider minimal status line items
+- [ ] Testing
+  - Manual: Start Lab, open chat, confirm live status/messages during long tool execution
+  - Automated: add lightweight integration test harness to open WS and post to `/api/chat/status`
+
+#### Event Envelope (canonical)
+```json
+{
+  "type": "status|tool_started|tool_finished|message|plan",
+  "notebook_path": "<string>",
+  "thread_id": "<string|null>",
+  "tool_call_id": "<string|null>",
+  "timestamp": "<ISO8601>",
+  "payload": {}
+}
+```
+- `status.payload = { "status": "working|info|error", "message": "..." }`
+- `message.payload = { "role": "assistant|user|system", "content": "..." }`
+- `plan.payload = { "steps": [{ "title": "...", "description": "..." }] }`
+
+#### Acceptance Criteria
+- [ ] Opening chat with an active notebook establishes WS and shows mid-run status/messages/plan
+- [ ] Switching notebooks resubscribes and routes events correctly by `notebook_path`
+- [ ] Invalid token on WS is rejected; HTTP endpoints continue to persist
+- [ ] No crashes or memory leaks on frequent connects/disconnects
 
 ### 2) XSRF token fixes
 - Standardize outbound requests from `ChatHandler` to include:

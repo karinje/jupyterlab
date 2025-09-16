@@ -49,7 +49,7 @@
     "@jupyterlab/cells": "^4.5.0-alpha.1",
     "@jupyterlab/celltags-extension": "^4.5.0-alpha.1",
     "@jupyterlab/chat": "^4.1.0",
-    "@jupyterlab/chat-extension": "^4.1.0",
+    "@jupyterlab/chat-extension": "^4.1.3",
     "@jupyterlab/codeeditor": "^4.5.0-alpha.1",
     "@jupyterlab/codemirror": "^4.5.0-alpha.1",
     "@jupyterlab/codemirror-extension": "^4.5.0-alpha.1",

@@ -30,8 +30,17 @@ class ChatHandler:
     def __init__(self, server_url: str, token: str = None):
         self.server_url = server_url
         self.token = token
+        self.default_notebook_path: Optional[str] = None
 
-    async def send_status(self, message: str, status_type: str = "working"):
+    async def send_status(
+        self,
+        message: str,
+        status_type: str = "working",
+        *,
+        notebook_path: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+    ):
         """Send status update to chat UI"""
         try:
             import aiohttp
@@ -47,6 +56,9 @@ class ChatHandler:
                         "type": status_type,
                         "message": message,
                         "timestamp": datetime.utcnow().isoformat(),
+                        "notebook_path": notebook_path or self.default_notebook_path,
+                        "tool_call_id": tool_call_id,
+                        "thread_id": thread_id,
                     },
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=5),
@@ -55,7 +67,14 @@ class ChatHandler:
         except Exception as e:
             logger.warning(f"Failed to send status: {e}")
 
-    async def send_message(self, message: str):
+    async def send_message(
+        self,
+        message: str,
+        *,
+        notebook_path: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+    ):
         """Send message to chat UI"""
         try:
             import aiohttp
@@ -70,6 +89,9 @@ class ChatHandler:
                     json={
                         "content": message,
                         "timestamp": datetime.utcnow().isoformat(),
+                        "notebook_path": notebook_path or self.default_notebook_path,
+                        "tool_call_id": tool_call_id,
+                        "thread_id": thread_id,
                     },
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=5),
@@ -131,6 +153,8 @@ class DataAnalysisAgent:
         self.notebook_state_manager = NotebookStateManager(server_url, token)
         # Allow DI of a custom chat transport from the frontend/backend integration
         self.chat_handler = chat_handler or ChatHandler(server_url, token)
+        # Default notebook path for chat routing
+        self.chat_handler.default_notebook_path = default_notebook_path
         self.jupyter_tools_client = JupyterTools(server_url, token)
 
         # Initialize LLMs directly
@@ -401,11 +425,11 @@ class DataAnalysisAgent:
             )
             # Route based on tool name/inten
             route = "continue"
-            if name == "RespondToUser" and (args.get("intent") == "completion"):
+            if name == "RespondToUser":
                 route = "end"
-                # Surface the assistant completion as final_result so the frontend shows i
+                # Always surface the RespondToUser message as final_result so the UI shows exact text
                 preserved_state["final_result"] = args.get(
-                    "message", "Analysis completed"
+                    "message", ""
                 )
             preserved_state["route_after_tools"] = route
             preserved_state["messages"] = messages + [tool_msg]
@@ -512,6 +536,13 @@ class DataAnalysisAgent:
             # Update tools if notebook path changed
             if notebook_path != self.default_notebook_path:
                 self.update_notebook_path(notebook_path)
+            # Ensure chat messages (status/text) route to the current notebook over WS
+            try:
+                self.chat_handler.default_notebook_path = notebook_path
+            except Exception:
+                pass
+            # Keep internal default in sync to avoid repeated updates on subsequent turns
+            self.default_notebook_path = notebook_path
 
             # Create initial state
             initial_state = create_initial_state(

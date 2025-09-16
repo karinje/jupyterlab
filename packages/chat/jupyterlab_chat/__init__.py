@@ -5,11 +5,13 @@ import os
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Set, DefaultDict
 
 from jupyter_server.base.handlers import APIHandler
 from jupyter_server.extension.application import ExtensionApp
 import tornado.web
+import tornado.websocket
+from collections import defaultdict
 
 # Import our JupyterAgent tools
 from jupyter_tools_bridge.tools import JupyterTools
@@ -20,6 +22,160 @@ logger = logging.getLogger(__name__)
 # Module-level debug to confirm our code is loaded
 logger.info("🔥🔥🔥 JUPYTERLAB CHAT MODULE IMPORTED - NEW VERSION! 🔥🔥🔥")
 print("[chat-backend] module import: JUPYTERLAB CHAT MODULE IMPORTED - NEW VERSION!")
+
+class ChatBroadcaster:
+    """Simple in-process broadcaster keyed by notebook_path."""
+
+    def __init__(self):
+        self._subscribers: DefaultDict[str, Set[tornado.websocket.WebSocketHandler]] = defaultdict(set)
+        # Recent assistant messages to deduplicate bursts (notebook_path, content) -> last_ms
+        self._recent_messages: Dict[tuple, float] = {}
+
+    def subscribe(self, notebook_path: str, ws: tornado.websocket.WebSocketHandler) -> None:
+        key = notebook_path or "*"
+        self._subscribers[key].add(ws)
+
+    def unsubscribe(self, notebook_path: str, ws: tornado.websocket.WebSocketHandler) -> None:
+        key = notebook_path or "*"
+        bucket = self._subscribers.get(key)
+        if bucket and ws in bucket:
+            bucket.remove(ws)
+        if bucket and not bucket:
+            self._subscribers.pop(key, None)
+
+    def broadcast(self, event: dict) -> None:
+        try:
+            import json as _json
+            import time as _time
+
+            notebook_path = event.get("notebook_path") or "*"
+            etype = event.get("type") or "unknown"
+            payload = _json.dumps(event)
+
+            # Deduplicate assistant messages for 2 seconds window per notebook/content
+            if etype == "message":
+                try:
+                    content = (event.get("payload") or {}).get("content", "")
+                    key = (notebook_path, str(content))
+                    now = _time.time() * 1000.0
+                    last = self._recent_messages.get(key, 0)
+                    if now - last < 2000:
+                        print(f"[WS] dedup drop MESSAGE path={notebook_path}")
+                        return
+                    self._recent_messages[key] = now
+                except Exception:
+                    pass
+
+            # Deliver to targeted subscribers if a concrete notebook_path is provided;
+            # only deliver to global ('*') subscribers when notebook_path is '*'. Never both.
+            if notebook_path and notebook_path != "*":
+                targets = list(self._subscribers.get(notebook_path, set()))
+            else:
+                targets = list(self._subscribers.get("*", set()))
+
+            try:
+                logger.info(
+                    f"WS broadcast type={etype} notebook_path={notebook_path} recipients={len(targets)}"
+                )
+                print(
+                    f"[WS] broadcast type={etype} recipients={len(targets)} path={notebook_path}"
+                )
+            except Exception:
+                pass
+
+            for ws in list(targets):
+                try:
+                    if not ws.ws_connection or ws.ws_connection.is_closing():
+                        # prune silently
+                        for key, bucket in list(self._subscribers.items()):
+                            if ws in bucket:
+                                bucket.discard(ws)
+                                if not bucket:
+                                    self._subscribers.pop(key, None)
+                        continue
+                    ws.write_message(payload)
+                except Exception as _e:
+                    logger.debug(f"WS send failed; pruning: {_e}")
+                    for key, bucket in list(self._subscribers.items()):
+                        if ws in bucket:
+                            bucket.discard(ws)
+                            if not bucket:
+                                self._subscribers.pop(key, None)
+        except Exception as e:
+            logger.warning(f"Broadcast error: {e}")
+
+
+# Module-level broadcaster
+chat_broadcaster = ChatBroadcaster()
+
+
+class ChatStreamHandler(tornado.websocket.WebSocketHandler):
+    """WebSocket stream for live chat events."""
+
+    def check_origin(self, origin: str) -> bool:
+        try:
+            from urllib.parse import urlparse
+
+            if not origin:
+                return False
+            o = urlparse(origin)
+            # Allow same host (http or https) and localhost
+            host = self.request.host.split(":")[0]
+            return o.hostname in {host, "127.0.0.1", "localhost"}
+        except Exception:
+            return False
+
+    def _get_server_token(self) -> str:
+        try:
+            # Try to extract server_app from settings
+            server_app = (
+                self.settings.get("serverapp")
+                or self.settings.get("server_app")
+                or (getattr(self.application, "settings", {}) or {}).get("serverapp")
+                or (getattr(self.application, "settings", {}) or {}).get("server_app")
+            )
+            token = None
+            if server_app is not None:
+                if hasattr(server_app, "identity_provider") and hasattr(
+                    server_app.identity_provider, "token"
+                ):
+                    token = server_app.identity_provider.token
+                if not token and hasattr(server_app, "token"):
+                    token = server_app.token
+            return token or ""
+        except Exception:
+            return ""
+
+    def open(self):
+        try:
+            # Validate token if server has one
+            token = self.get_query_argument("token", default=None)
+            server_token = self._get_server_token()
+
+            if server_token:
+                if not token or token != server_token:
+                    logger.warning("WS auth failed: invalid/missing token")
+                    self.close(code=4003, reason="Forbidden")
+                    return
+
+            self._notebook_path = self.get_query_argument("notebook_path", default="*")
+            self._thread_id = self.get_query_argument("thread_id", default=None)
+            chat_broadcaster.subscribe(self._notebook_path, self)
+            logger.info(f"WS open for notebook_path={self._notebook_path}")
+        except Exception as e:
+            logger.error(f"WS open error: {e}")
+            self.close(code=1011, reason="Server error")
+
+    def on_close(self):
+        try:
+            chat_broadcaster.unsubscribe(getattr(self, "_notebook_path", "*"), self)
+        except Exception:
+            pass
+
+    def on_message(self, message):
+        # Read-only stream; ignore incoming messages
+        pass
+
 
 # LangGraph agent is TypeScript-based, runs in frontend
 # Backend just needs to signal that it should be used
@@ -271,6 +427,32 @@ class ChatStatusHandler(APIHandler):
                             notebook_path,
                             {"role": "assistant", "content": f"[status] {msg_text}"},
                         )
+                        # Broadcast live status event
+                        try:
+                            targets = []
+                            key = notebook_path or "*"
+                            if key and key != "*":
+                                targets = list(chat_broadcaster._subscribers.get(key, set()))
+                            else:
+                                targets = list(chat_broadcaster._subscribers.get("*", set()))
+                            print(f"[WS] about to broadcast STATUS to recipients={len(targets)} path={key}")
+                            chat_broadcaster.broadcast(
+                                {
+                                    "type": item.get("type") or "status",
+                                    "notebook_path": notebook_path,
+                                    "thread_id": item.get("thread_id"),
+                                    "tool_call_id": item.get("tool_call_id"),
+                                    "timestamp": item.get("timestamp")
+                                    or datetime.utcnow().isoformat(),
+                                    "payload": {
+                                        "status": item.get("status")
+                                        or "working",
+                                        "message": msg_text,
+                                    },
+                                }
+                            )
+                        except Exception as _be:
+                            logger.debug(f"status broadcast failed: {_be}")
             except Exception as _e:
                 logger.warning(f"status persist failed: {_e}")
 
@@ -330,6 +512,31 @@ class ChatMessageHandler(APIHandler):
                             notebook_path,
                             {"role": "assistant", "content": message_text},
                         )
+                        # Broadcast live assistant message
+                        try:
+                            targets = []
+                            key = notebook_path or "*"
+                            if key and key != "*":
+                                targets = list(chat_broadcaster._subscribers.get(key, set()))
+                            else:
+                                targets = list(chat_broadcaster._subscribers.get("*", set()))
+                            print(f"[WS] about to broadcast MESSAGE to recipients={len(targets)} path={key}")
+                            chat_broadcaster.broadcast(
+                                {
+                                    "type": "message",
+                                    "notebook_path": notebook_path,
+                                    "thread_id": item.get("thread_id"),
+                                    "tool_call_id": item.get("tool_call_id"),
+                                    "timestamp": item.get("timestamp")
+                                    or datetime.utcnow().isoformat(),
+                                    "payload": {
+                                        "role": "assistant",
+                                        "content": message_text,
+                                    },
+                                }
+                            )
+                        except Exception as _be:
+                            logger.debug(f"message broadcast failed: {_be}")
             except Exception as _e:
                 logger.warning(f"message persist failed: {_e}")
 
@@ -911,6 +1118,7 @@ def _load_jupyter_server_extension(server_app):
         (r"/api/chat/openai", ChatOpenAIHandler),
         (r"/api/chat/status", ChatStatusHandler),
         (r"/api/chat/message", ChatMessageHandler),
+        (r"/api/chat/stream", ChatStreamHandler),
     ]
     server_app.web_app.add_handlers(".*$", handlers)
     server_app.log.info("JupyterLab Chat extension loaded with status endpoints")

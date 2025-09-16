@@ -168,6 +168,21 @@ export interface IChatService extends IDisposable {
   messageAdded: any;
 
   /**
+   * Optional signal emitted when a plan is received over WS
+   */
+  planReceived?: any;
+
+  /**
+   * Connect the live event stream for a notebook path
+   */
+  connectStream?(notebookPath: string | null): void;
+
+  /**
+   * Disconnect the live event stream
+   */
+  disconnectStream?(): void;
+
+  /**
    * Set LLM provider
    */
   setLLMProvider(provider: ILLMProvider): void;
