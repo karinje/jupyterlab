@@ -2,14 +2,10 @@ import asyncio
 import json
 import logging
 import os
-import re
-import subprocess
-import sys
-import tempfile
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from jupyter_server.base.handlers import APIHandler
 from jupyter_server.extension.application import ExtensionApp
@@ -29,6 +25,9 @@ print("[chat-backend] module import: JUPYTERLAB CHAT MODULE IMPORTED - NEW VERSI
 # Backend just needs to signal that it should be used
 LANGGRAPH_AVAILABLE = True  # Always available since it's frontend TypeScript
 logger.info("🚀 LangGraph agent available (TypeScript frontend)")
+
+# Cold-start flag: clear chat history in notebook metadata on first request after restart
+BOOT_CLEAR_DONE = False
 
 # Import function_tool decorator for OpenAI Agents SDK
 try:
@@ -183,6 +182,24 @@ class ConversationManager:
                     conversations
                 )
 
+                # Sanitize cells to avoid nbformat save errors (attachments None, outputs type)
+                try:
+                    cells = notebook_data["content"].get("cells", [])
+                    for c in cells:
+                        if not isinstance(c.get("metadata"), dict):
+                            c["metadata"] = {}
+                        if c.get("attachments") is None:
+                            c["attachments"] = {}
+                        ct = c.get("cell_type")
+                        if ct == "code":
+                            if not isinstance(c.get("outputs"), list):
+                                c["outputs"] = []
+                        else:
+                            if "outputs" in c and c["outputs"] is None:
+                                del c["outputs"]
+                except Exception as _e:
+                    logger.warning(f"conversation save sanitation failed: {_e}")
+
                 # Save notebook
                 save_data = {"type": "notebook", "content": notebook_data["content"]}
 
@@ -217,12 +234,46 @@ class ChatStatusHandler(APIHandler):
         """Handle status updates from LangGraph agent"""
         try:
             data = self.get_json_body()
-            logger.info(
-                f"📊 Agent Status Update: {data.get('type', 'unknown')} - {data.get('message', '')}"
-            )
+            items = data if isinstance(data, list) else [data]
+            logger.info(f"📊 Agent Status Update: batch={len(items)}")
+            # Persist status as an assistant message so chat UI can render it
+            try:
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    msg_text = item.get("message") or item.get("content") or ""
+                    notebook_path = item.get("notebook_path")
+                    if not notebook_path:
+                        # Fallback to active session if single
+                        import aiohttp
 
-            # For now, just log status updates
-            # In the future, this could broadcast to connected chat UIs via WebSocket
+                        server_url = f"http://127.0.0.1:{self.serverapp.port}"
+                        token = ChatOpenAIHandler._get_server_token(
+                            self
+                        )  # reuse helper
+                        headers = {"Authorization": f"token {token}"}
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(
+                                f"{server_url}/api/sessions", headers=headers
+                            ) as resp:
+                                if resp.status == 200:
+                                    data_sess = await resp.json()
+                                    if isinstance(data_sess, dict):
+                                        sessions = data_sess.get("sessions", [])
+                                        if (
+                                            isinstance(sessions, list)
+                                            and len(sessions) == 1
+                                        ):
+                                            notebook_path = sessions[0].get("path")
+                    if notebook_path and msg_text:
+                        conv = ConversationManager(self.serverapp)
+                        await conv.save_conversation_message(
+                            notebook_path,
+                            {"role": "assistant", "content": f"[status] {msg_text}"},
+                        )
+            except Exception as _e:
+                logger.warning(f"status persist failed: {_e}")
+
             self.set_status(200)
             self.finish({"status": "received"})
 
@@ -244,10 +295,44 @@ class ChatMessageHandler(APIHandler):
         """Handle messages from LangGraph agent"""
         try:
             data = self.get_json_body()
-            logger.info(f"💬 Agent Message: {data.get('type', 'unknown')}")
+            items = data if isinstance(data, list) else [data]
+            logger.info(f"💬 Agent Message batch: {len(items)}")
+            # Persist assistant message so chat UI can render it
+            try:
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    notebook_path = item.get("notebook_path")
+                    message_text = item.get("content") or item.get("message") or ""
+                    if not notebook_path:
+                        # Fallback to active session if single
+                        import aiohttp
 
-            # For now, just log messages
-            # In the future, this could send messages to chat UI
+                        server_url = f"http://127.0.0.1:{self.serverapp.port}"
+                        token = ChatOpenAIHandler._get_server_token(self)
+                        headers = {"Authorization": f"token {token}"}
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(
+                                f"{server_url}/api/sessions", headers=headers
+                            ) as resp:
+                                if resp.status == 200:
+                                    data_sess = await resp.json()
+                                    if isinstance(data_sess, dict):
+                                        sessions = data_sess.get("sessions", [])
+                                        if (
+                                            isinstance(sessions, list)
+                                            and len(sessions) == 1
+                                        ):
+                                            notebook_path = sessions[0].get("path")
+                    if notebook_path and message_text:
+                        conv = ConversationManager(self.serverapp)
+                        await conv.save_conversation_message(
+                            notebook_path,
+                            {"role": "assistant", "content": message_text},
+                        )
+            except Exception as _e:
+                logger.warning(f"message persist failed: {_e}")
+
             self.set_status(200)
             self.finish({"status": "received"})
 
@@ -272,7 +357,7 @@ class ChatOpenAIHandler(APIHandler):
     async def post(self):
         """Handle POST requests to /api/chat/openai"""
         self.log.info(
-            "🚨🚨🚨 CHAT HANDLER CALLED - VERSION 4 - TESTING PYTHON RELOAD! 🚨🚨��"
+            "🚨🚨🚨 CHAT HANDLER CALLED - VERSION 4 - TESTING PYTHON RELOAD! 🚨🚨🚨"
         )
         print("[chat-backend] ChatOpenAIHandler.post: entered")
         self.log.info("🔍 IMMEDIATE NEXT LINE AFTER CHAT HANDLER CALLED")
@@ -285,7 +370,9 @@ class ChatOpenAIHandler(APIHandler):
             # Parse request body
             parse_start = time.time()
             self.log.info(f"🔍 RAW REQUEST BODY: {self.request.body}")
-            print(f"[chat-backend] raw body bytes: {len(self.request.body) if self.request.body else 0}")
+            print(
+                f"[chat-backend] raw body bytes: {len(self.request.body) if self.request.body else 0}"
+            )
             body = json.loads(self.request.body)
             self.log.info("🔍 PARSED BODY SUCCESS")
             message = body.get("message", "")
@@ -313,17 +400,40 @@ class ChatOpenAIHandler(APIHandler):
                                 data = await resp.json()
                                 sessions = data.get("sessions", [])
                                 if len(sessions) == 1:
-                                    notebook_path = sessions[0].get("path", notebook_path)
+                                    notebook_path = sessions[0].get(
+                                        "path", notebook_path
+                                    )
                                     self.log.info(
                                         f"🧭 Fallback notebook_path from sessions: {notebook_path}"
                                     )
-                                    print(f"[chat-backend] notebook_path (fallback from sessions): {notebook_path}")
+                                    print(
+                                        f"[chat-backend] notebook_path (fallback from sessions): {notebook_path}"
+                                    )
                                 else:
                                     self.log.info(
                                         f"🧭 Fallback skipped; session count={len(sessions)}"
                                     )
                 except Exception as e:
                     self.log.warning(f"Fallback to sessions failed: {e}")
+
+            # Cold start clearing: on the first request after server restart, clear chat history
+            global BOOT_CLEAR_DONE
+            if not BOOT_CLEAR_DONE and notebook_path:
+                try:
+                    self.log.warning(
+                        f"❄️ Cold start: clearing chat_conversations for {notebook_path}"
+                    )
+                    # Prime XSRF by loading once, then save empty conversations
+                    await self.conversation_manager.load_conversation_history(
+                        notebook_path
+                    )
+                    empty_conv = self.conversation_manager._create_empty_conversations()
+                    await self.conversation_manager._save_conversations_to_notebook(
+                        notebook_path, empty_conv
+                    )
+                    BOOT_CLEAR_DONE = True
+                except Exception as e:
+                    self.log.warning(f"Cold start clear failed: {e}")
 
             # Continue as before
             chat_mode = body.get("chat_mode", "auto")  # auto, langgraph, openai_agents
@@ -337,25 +447,32 @@ class ChatOpenAIHandler(APIHandler):
 
             # Load conversation history
             history_start = time.time()
-            conversations = await self.conversation_manager.load_conversation_history(
-                notebook_path
-            )
-            active_thread_id = thread_id or conversations.get("active_thread")
-
-            # Get conversation context for LLM
             conversation_context = []
-            if active_thread_id and active_thread_id in conversations.get(
-                "threads", {}
-            ):
-                thread_messages = conversations["threads"][active_thread_id].get(
-                    "messages", []
+            active_thread_id = None
+            if BOOT_CLEAR_DONE:
+                conversations = (
+                    await self.conversation_manager.load_conversation_history(
+                        notebook_path
+                    )
                 )
-                conversation_context = thread_messages[
-                    -10:
-                ]  # Last 10 messages for context
+                active_thread_id = thread_id or conversations.get("active_thread")
+                if active_thread_id and active_thread_id in conversations.get(
+                    "threads", {}
+                ):
+                    thread_messages = conversations["threads"][active_thread_id].get(
+                        "messages", []
+                    )
+                    conversation_context = thread_messages[-10:]
+            else:
+                self.log.warning(
+                    "❄️ Cold start: skipping history load; starting with empty conversation_context"
+                )
+                BOOT_CLEAR_DONE = True
 
             history_time = time.time() - history_start
-            logger.info(f"⚡ History loading took {history_time:.3f}s")
+            logger.info(
+                f"⚡ History handling took {history_time:.3f}s (BOOT_CLEAR_DONE={BOOT_CLEAR_DONE})"
+            )
 
             # Save user message to conversation history
             save_user_start = time.time()
@@ -370,21 +487,23 @@ class ChatOpenAIHandler(APIHandler):
 
             # ALWAYS USE LANGGRAPH AGENT - NO FALLBACKS!
             self.log.info("🤖 ALWAYS USING LANGGRAPH AGENT")
+            # Force empty conversation_context for now to avoid stale history
+            if conversation_context:
+                self.log.warning(
+                    f"❄️ Forcing empty conversation_context (dropping {len(conversation_context)} messages)"
+                )
             response = await self._run_langgraph_agent(
                 message,
                 notebook_path,
-                conversation_context,
+                [],  # FORCE COLD CONTEXT
                 model,
                 mcp_servers_config,
                 provider,
-            )  # Save assistant response to conversation history
-            save_assistant_start = time.time()
-            assistant_message = {"role": "assistant", "content": str(response)}
-            await self.conversation_manager.save_conversation_message(
-                notebook_path, assistant_message, active_thread_id
             )
-            save_assistant_time = time.time() - save_assistant_start
-            logger.info(f"⚡ Assistant message saving took {save_assistant_time:.3f}s")
+            # Skip saving assistant to metadata for now to avoid reintroducing history
+            logger.warning(
+                "💾 Skipping assistant message save to notebook metadata (temp)"
+            )
 
             # Return response
             response_data = {

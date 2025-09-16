@@ -172,3 +172,9 @@ jlab.debug.log
 
 # JupyterLab build debug logs
 /var/folders/*/jupyterlab-debug-*.log
+
+# JupyterLab rotated logs (do not commit)
+jlab.*.log
+
+# Local test notebooks not for commit
+test_tools.ipynb

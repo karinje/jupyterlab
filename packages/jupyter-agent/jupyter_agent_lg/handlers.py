@@ -59,7 +59,7 @@ class LangGraphHandler(APIHandler):
             request_data = self.get_json_body()
             message = request_data.get("message", "")
             notebook_path = request_data.get("notebook_path", "Untitled.ipynb")
-            conversation_history = request_data.get("conversation_history", [])
+            conversation_history = []  # Force cold start: ignore prior history for now
             model = request_data.get("model", "gpt-4o")
             provider = request_data.get("provider", "openai")
             mcp_servers = request_data.get("mcp_servers", {})

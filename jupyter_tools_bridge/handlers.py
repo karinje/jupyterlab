@@ -312,11 +312,12 @@ class InsertCellHandler(BaseToolsHandler):
                 "id": cell_id,
                 "cell_type": cell_type,
                 "source": source,
-                "metadata": metadata,
+                "metadata": metadata if isinstance(metadata, dict) else {},
                 "execution_state": "idle",
                 "execution_count": None,
                 "outputs": [] if cell_type == "code" else None,
-                "attachments": None,
+                # nbformat expects attachments to be a mapping, not None
+                "attachments": {},
             }
 
             # Insert the cell using YNotebook API
@@ -529,19 +530,10 @@ class ExecuteCellHandler(BaseToolsHandler):
             if cell.get("cell_type") != "code":
                 raise HTTPError(400, "Can only execute code cells")
 
-            # Get kernel client
+            # Get kernel client (already starts channels)
             client = self.get_kernel_client(kernel_id)
             if not client:
                 raise HTTPError(404, f"Kernel not found: {kernel_id}")
-
-            # Ensure channels are started (sync or async)
-            try:
-                if hasattr(client, "start_channels"):
-                    started = client.start_channels()
-                    if hasattr(started, "__await__"):
-                        await started
-            except Exception as e:
-                logger.error(f"start_channels failed: {e}")
 
             try:
                 # Clear existing outputs
@@ -783,9 +775,9 @@ class SaveNotebookHandler(BaseToolsHandler):
                     # Non-code cells should not carry outputs
                     if "outputs" in c and c["outputs"] is None:
                         del c["outputs"]
-                # attachments: drop if None
+                # attachments: ensure dict
                 if c.get("attachments") is None:
-                    c.pop("attachments", None)
+                    c["attachments"] = {}
                 # id: ensure present (nbformat 4.5+)
                 if not c.get("id"):
                     c["id"] = str(uuid.uuid4())

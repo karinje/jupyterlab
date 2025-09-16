@@ -15,7 +15,9 @@ from ..schemas import (
 logger = logging.getLogger(__name__)
 
 
-def create_jupyter_tools(jupyter_tools_client, notebook_path: str) -> List[StructuredTool]:
+def create_jupyter_tools(
+    jupyter_tools_client, notebook_path: str
+) -> List[StructuredTool]:
     """Create Jupyter notebook manipulation tools with correct notebook path"""
 
     # Capture logger in closure scope
@@ -29,7 +31,6 @@ def create_jupyter_tools(jupyter_tools_client, notebook_path: str) -> List[Struc
             print(
                 f"🔧 TOOL CALLED: insert_and_execute_cell with code: {str(code)[:50]}..."
             )
-            # HYPOTHESIS TEST: Log what's being inserted and when
             code_preview = (
                 (code[:50] + "...")
                 if isinstance(code, str) and len(code) > 50
@@ -37,13 +38,6 @@ def create_jupyter_tools(jupyter_tools_client, notebook_path: str) -> List[Struc
             )
             tool_logger.info(f"🔧 INSERTING CELL: {cell_type} at {position}")
             tool_logger.info(f"🔧 Code preview: {code_preview}")
-
-            # Check what type of plot this is
-            code_lower = code.lower()
-            if "y**2" in code_lower or "**2" in code_lower:
-                tool_logger.info("🔧 ⚠️  This is a y**2 plot!")
-            if "y**3" in code_lower or "x**3" in code_lower or "**3" in code_lower:
-                tool_logger.info("🔧 ⚠️  This is a y**3/x**3 plot!")
 
             if cell_type == "code":
                 tool_logger.info(
@@ -57,13 +51,11 @@ def create_jupyter_tools(jupyter_tools_client, notebook_path: str) -> List[Struc
                 tool_logger.info("🔧 ✅ CELL INSERTION COMPLETED")
                 exec_count = result.get("execution_count")
                 outputs_count = result.get("outputs_count")
-                return (
-                    f"Code executed successfully. execution_count={exec_count}, outputs_count={outputs_count}"
-                )
+                return f"Code executed successfully. execution_count={exec_count}, outputs_count={outputs_count}"
             else:
                 tool_logger.info("🔧 CALLING insert_cell for markdown")
                 cell_index = "append" if position == "end" else 0
-                result = await jupyter_tools_client.insert_cell(
+                await jupyter_tools_client.insert_cell(
                     notebook_path=notebook_path,
                     content=code,
                     cell_type="markdown",
@@ -106,14 +98,6 @@ def create_jupyter_tools(jupyter_tools_client, notebook_path: str) -> List[Struc
             args_schema=DeleteCellArgs,
             coroutine=delete_cell,
         ),
-        # DISABLED: get_notebook_cells - redundant since context already provides all cell info
-        # StructuredTool.from_function(
-        #     func=get_notebook_cells,
-        #     name="get_notebook_cells",
-        #     description="Get information about all cells in the notebook",
-        #     args_schema=GetNotebookCellsArgs,
-        #     coroutine=get_notebook_cells
-        # )
     ]
 
     tool_logger.info(
@@ -137,7 +121,6 @@ def _format_outputs(outputs: List[Dict]) -> str:
             text = output.get("text", "")
             if isinstance(text, list):
                 text = "".join(text)
-            # Safely slice text
             text_preview = (
                 text[:200] if isinstance(text, str) and len(text) > 200 else str(text)
             )
@@ -149,7 +132,6 @@ def _format_outputs(outputs: List[Dict]) -> str:
                 text = data["text/plain"]
                 if isinstance(text, list):
                     text = "".join(text)
-                # Safely slice text
                 text_preview = (
                     text[:200]
                     if isinstance(text, str) and len(text) > 200

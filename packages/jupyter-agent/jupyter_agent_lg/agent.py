@@ -1,5 +1,5 @@
 """
-LangGraph Data Analysis Agent
+LangGraph Data Analysis Agen
 
 The main agent class that orchestrates data analysis workflows using LangGraph
 for state management and decision routing. Provides pure LLM-driven analysis
@@ -14,14 +14,14 @@ from datetime import datetime
 
 from .state import create_initial_state, increment_iteration
 from .context import NotebookStateManager
-from .schemas import LLMDecision
 from .tools import create_jupyter_tools
 from jupyter_tools_bridge.tools import JupyterTools
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
+from pydantic import create_model, Field, BaseModel
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 class ChatHandler:
@@ -111,7 +111,7 @@ class DataAnalysisAgent:
     - Dynamic planning with user interaction
     - Multi-step analysis with context awareness
     - Real-time status updates
-    - Multi-LLM support
+    - Multi-LLM suppor
     """
 
     def __init__(
@@ -121,6 +121,7 @@ class DataAnalysisAgent:
         openai_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
         default_notebook_path: str = "analysis.ipynb",
+        chat_handler: Optional[ChatHandler] = None,
     ):
         self.server_url = server_url
         self.token = token
@@ -128,17 +129,22 @@ class DataAnalysisAgent:
 
         # Initialize components
         self.notebook_state_manager = NotebookStateManager(server_url, token)
-        self.chat_handler = ChatHandler(server_url, token)
+        # Allow DI of a custom chat transport from the frontend/backend integration
+        self.chat_handler = chat_handler or ChatHandler(server_url, token)
         self.jupyter_tools_client = JupyterTools(server_url, token)
 
         # Initialize LLMs directly
         self.openai_llm = (
-            ChatOpenAI(api_key=openai_api_key, model="gpt-4o")
+            ChatOpenAI(api_key=openai_api_key, model="gpt-4o", temperature=0.2)
             if openai_api_key
             else None
         )
         self.anthropic_llm = (
-            ChatAnthropic(api_key=anthropic_api_key, model="claude-3-5-sonnet-20241022")
+            ChatAnthropic(
+                api_key=anthropic_api_key,
+                model="claude-3-5-sonnet-20241022",
+                temperature=0.2,
+            )
             if anthropic_api_key
             else None
         )
@@ -147,177 +153,344 @@ class DataAnalysisAgent:
         self.jupyter_tools = create_jupyter_tools(
             self.jupyter_tools_client, default_notebook_path
         )
+
+        # Create system tools (RespondToUser, CreatePlan)
+        from .tools import create_system_tools
+
+        self.system_tools = create_system_tools(self.chat_handler)
+
+        # Optionally: load MCP tools if available
+        try:
+            from .tools.mcp_tools import create_mcp_tools
+
+            self.mcp_tools = create_mcp_tools(
+                None
+            )  # TODO: inject real MCP client when ready
+        except Exception:
+            self.mcp_tools = []
+
+        original_tools = self.system_tools + self.jupyter_tools + self.mcp_tools
+
+        # Augment tool input schemas at bind time to add an optional status_message everywhere
+        def _augment_tools_with_status_message(tools):
+            augmented = []
+            for t in tools:
+                try:
+                    args_schema = getattr(t, "args_schema", None)
+                    if not args_schema or not issubclass(args_schema, BaseModel):
+                        augmented.append(t)
+                        continue
+                    # Build a new Pydantic model extending the existing schema with optional status_message
+                    # Pydantic v2: use model_fields mapping to FieldInfo
+                    try:
+                        base_fields = getattr(args_schema, "model_fields", {})
+                        fields = {
+                            name: (f.annotation, f) for name, f in base_fields.items()
+                        }
+                    except Exception:
+                        # Fallback for older models
+                        fields = {}
+                    StatusModel = create_model(  # type: ignore
+                        f"{args_schema.__name__}WithStatus",
+                        **fields,
+                        status_message=(
+                            Optional[str],
+                            Field(
+                                default=None,
+                                description="Short status to display before executing this action",
+                            ),
+                        ),
+                        __base__=args_schema,
+                    )
+                    from langchain_core.tools import StructuredTool
+
+                    new_tool = StructuredTool.from_function(
+                        func=t.func,
+                        name=t.name,
+                        description=t.description,
+                        args_schema=StatusModel,
+                        coroutine=t.coroutine,
+                    )
+                    augmented.append(new_tool)
+                except Exception as e:
+                    logger.warning(
+                        f"failed to augment tool {getattr(t, 'name', str(t))}: {e}"
+                    )
+                    augmented.append(t)
+            return augmented
+
+        augmented_tools = _augment_tools_with_status_message(original_tools)
+
         self.openai_llm_with_tools = (
-            self.openai_llm.bind_tools(self.jupyter_tools, parallel_tool_calls=False)
+            self.openai_llm.bind_tools(
+                augmented_tools, parallel_tool_calls=False, tool_choice="any"
+            )
             if self.openai_llm
             else None
         )
+        if self.openai_llm_with_tools:
+            try:
+                setattr(
+                    self.openai_llm_with_tools,
+                    "_bound_tool_names",
+                    [t.name for t in augmented_tools],
+                )
+            except Exception:
+                pass
         self.anthropic_llm_with_tools = (
-            self.anthropic_llm.bind_tools(self.jupyter_tools, parallel_tool_calls=False)
+            self.anthropic_llm.bind_tools(
+                augmented_tools, parallel_tool_calls=False, tool_choice="any"
+            )
             if self.anthropic_llm
             else None
         )
+        if self.anthropic_llm_with_tools:
+            try:
+                setattr(
+                    self.anthropic_llm_with_tools,
+                    "_bound_tool_names",
+                    [t.name for t in augmented_tools],
+                )
+            except Exception:
+                pass
 
         # Build LangGraph workflow
         self.workflow = self._build_graph()
 
         logger.info(
-            f"🤖 DataAnalysisAgent initialized with {len(self.jupyter_tools)} tools"
+            f"🤖 DataAnalysisAgent initialized with {len(original_tools)} tools (augmented schemas for binding)"
         )
+
+    def _list_bound_tools_and_params(self, llm) -> List[Dict[str, Any]]:
+        """Return provider-agnostic view of bound tools from a tool-bound LLM runnable.
+
+        Supports OpenAI (tools=[{"type":"function","function":{...}}]) and Anthropic
+        (tools=[{"name":..., "input_schema":{...}}]) formats. Falls back gracefully.
+        """
+        result: List[Dict[str, Any]] = []
+        try:
+            raw_tools = []
+            if hasattr(llm, "kwargs") and isinstance(getattr(llm, "kwargs"), dict):
+                raw_tools = llm.kwargs.get("tools", []) or []
+            for t in raw_tools:
+                tool_name = "unknown"
+                params_schema: Dict[str, Any] = {}
+                if isinstance(t, dict) and "function" in t:
+                    fn = t.get("function", {}) or {}
+                    tool_name = fn.get("name", "unknown")
+                    params_schema = fn.get("parameters", {}) or {}
+                elif isinstance(t, dict) and "input_schema" in t:
+                    tool_name = t.get("name", "unknown")
+                    params_schema = t.get("input_schema", {}) or {}
+                else:
+                    if isinstance(t, dict):
+                        tool_name = t.get("name", "unknown")
+                        params_schema = t.get("parameters", {}) or {}
+
+                props: Dict[str, Any] = params_schema.get("properties", {}) or {}
+                required = set(params_schema.get("required", []) or [])
+                params_list: List[Dict[str, Any]] = []
+                for param_name, meta in props.items():
+                    if not isinstance(meta, dict):
+                        params_list.append(
+                            {
+                                "name": param_name,
+                                "type": "unknown",
+                                "required": param_name in required,
+                                "description": "",
+                            }
+                        )
+                        continue
+                    ptype = (
+                        meta.get("type")
+                        or meta.get("anyOf")
+                        or meta.get("$ref")
+                        or "unknown"
+                    )
+                    params_list.append(
+                        {
+                            "name": param_name,
+                            "type": ptype,
+                            "required": param_name in required,
+                            "description": meta.get("description", ""),
+                        }
+                    )
+
+                result.append({"tool": tool_name, "params": params_list})
+        except Exception as e:
+            logger.warning(f"tool enumeration failed: {e}")
+        return result
 
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph workflow"""
         workflow = StateGraph(dict)
 
-        # Add nodes
         workflow.add_node("analyze_and_decide", self.analyze_and_decide)
-        workflow.add_node(
-            "tools", self.execute_tools
-        )  # Use our custom method instead of ToolNode
-        workflow.add_node("create_plan", self.create_plan)
-        workflow.add_node("respond", self.respond)
-        workflow.add_node("complete_analysis", self.complete_analysis)
+        workflow.add_node("tools", self.execute_tools)
 
-        # Set entry point
         workflow.set_entry_point("analyze_and_decide")
 
-        # Add conditional edges based on next_action
-        def route_decision(state: Dict[str, Any]) -> str:
-            next_action = state.get("next_action", "complete_analysis")
-
-            # Safety check for max iterations
-            if state.get("current_iteration", 0) >= 10:
-                logger.warning("🛑 Max iterations reached, completing analysis")
-                return "complete_analysis"
-
-            # Check if analysis is complete
-            if state.get("is_complete", False):
-                return END
-
-            return next_action
+        # analyze -> tools or analyze (self-loop)
+        def route_from_analyze(state: Dict[str, Any]) -> str:
+            messages = state.get("messages", [])
+            if not messages:
+                return "retry"
+            # Find the most recent assistant message object (with potential tool_calls)
+            candidate = None
+            for msg in reversed(messages):
+                # LangChain AIMessage has attribute 'tool_calls'; system/user dicts will no
+                if hasattr(msg, "tool_calls"):
+                    candidate = msg
+                    break
+            if candidate is None:
+                return "retry"
+            tool_calls = getattr(candidate, "tool_calls", []) or []
+            return "tools" if len(tool_calls) > 0 else "retry"
 
         workflow.add_conditional_edges(
             "analyze_and_decide",
-            route_decision,
+            route_from_analyze,
             {
                 "tools": "tools",
-                "create_plan": "create_plan",
-                "respond": "respond",
-                "complete_analysis": "complete_analysis",
-                END: END,
+                "retry": "analyze_and_decide",
             },
         )
 
-        # All other nodes go back to analyze_and_decide
-        workflow.add_edge("tools", "analyze_and_decide")
-        workflow.add_edge("create_plan", "analyze_and_decide")
-        workflow.add_edge("respond", "analyze_and_decide")
-        workflow.add_edge("complete_analysis", END)
+        # tools -> analyze or END
+        def route_from_tools(state: Dict[str, Any]) -> str:
+            return state.get("route_after_tools", "continue")
+
+        workflow.add_conditional_edges(
+            "tools",
+            route_from_tools,
+            {
+                "continue": "analyze_and_decide",
+                "end": END,
+            },
+        )
 
         return workflow.compile()
 
     async def execute_tools(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute tools and preserve state"""
+        """Execute exactly the first tool_call from the last AI message and route accordingly."""
         try:
-            print(f"🔥 EXECUTE_TOOLS CALLED with state keys: {list(state.keys())}")
-            logger.info("🔧 Executing tools...")
+            from langchain_core.messages import ToolMessage
 
-            # Preserve ALL original state
+            logger.info("🛠️ [tools] start")
             preserved_state = dict(state)
-
-            # Get the last message which should contain tool calls
+            preserved_state["route_after_tools"] = "continue"
             messages = state.get("messages", [])
             if not messages:
-                logger.error("❌ No messages in state for tool execution")
-                return state
-
+                preserved_state["route_after_tools"] = "end"
+                return preserved_state
             last_message = messages[-1]
-            if not hasattr(last_message, "tool_calls") or not last_message.tool_calls:
-                logger.error("❌ No tool calls in last message")
-                return state
-
-            print(f"🔥 EXECUTING {len(last_message.tool_calls)} TOOL CALLS")
-            logger.info(f"🔧 Executing {len(last_message.tool_calls)} tool calls")
-
-            # Execute each tool call
-            tool_results = []
-            for tool_call in last_message.tool_calls:
-                tool_name = tool_call.get("name")
-                tool_args = tool_call.get("args", {})
-                tool_call_id = tool_call.get("id")
-
-                print(f"🔥 EXECUTING TOOL: {tool_name} with args: {tool_args}")
-                logger.info(f"🔧 Executing tool: {tool_name}")
-
-                # Find and execute the tool
-                tool_result = None
-                for tool in self.jupyter_tools:
-                    if tool.name == tool_name:
-                        try:
-                            if asyncio.iscoroutinefunction(tool.func):
-                                tool_result = await tool.func(**tool_args)
-                            else:
-                                tool_result = tool.func(**tool_args)
-                            break
-                        except Exception as e:
-                            logger.error(f"❌ Tool {tool_name} failed: {e}")
-                            tool_result = f"Error executing {tool_name}: {e}"
-
-                if tool_result is None:
-                    tool_result = f"Tool {tool_name} not found"
-
-                # Create tool message
-                from langchain_core.messages import ToolMessage
-
-                tool_message = ToolMessage(
-                    content=str(tool_result), name=tool_name, tool_call_id=tool_call_id
+            tool_calls = getattr(last_message, "tool_calls", []) or []
+            if not tool_calls:
+                preserved_state["route_after_tools"] = "end"
+                return preserved_state
+            first_call = tool_calls[0]
+            name = first_call.get("name")
+            args = first_call.get("args", {}) or {}
+            logger.warning(
+                f"🛠️ [tools] executing name={name} args={args} id={first_call.get('id')}"
+            )
+            # Execute only the first tool_call and append its ToolMessage
+            result = await self._execute_single_tool(first_call)
+            tool_msg = ToolMessage(
+                content=str(result), name=name, tool_call_id=first_call.get("id")
+            )
+            # Route based on tool name/inten
+            route = "continue"
+            if name == "RespondToUser" and (args.get("intent") == "completion"):
+                route = "end"
+                # Surface the assistant completion as final_result so the frontend shows i
+                preserved_state["final_result"] = args.get(
+                    "message", "Analysis completed"
                 )
-                tool_results.append(tool_message)
-
-                print(f"🔥 TOOL {tool_name} RESULT: {str(tool_result)[:100]}...")
-                logger.info(f"🔧 Tool {tool_name} completed")
-
-            # Add tool results to messages while preserving ALL other state
-            preserved_state["messages"] = messages + tool_results
-
-            print(
-                f"🔥 EXECUTE_TOOLS COMPLETED, preserved state keys: {list(preserved_state.keys())}"
-            )
-            logger.info(
-                f"🔧 Tool execution completed, state keys preserved: {list(preserved_state.keys())}"
-            )
-
-            # CRITICAL: Add delay to ensure notebook state is fully committed
-            await asyncio.sleep(0.5)
-            logger.info("⏱️ Waited for notebook state to stabilize")
-
+            preserved_state["route_after_tools"] = route
+            preserved_state["messages"] = messages + [tool_msg]
+            preserved_state["last_payload_name"] = name
+            preserved_state["last_payload_args"] = args
+            logger.info(f"🛠️ [tools] route_after_tools={route}")
             return preserved_state
 
         except Exception as e:
-            print(f"🔥 EXECUTE_TOOLS EXCEPTION: {e}")
-            logger.error(f"❌ Error in tool execution: {e}")
-            # Preserve original state even on error
-            state["reasoning"] = f"Tool execution error: {e}"
+            logger.error(f"❌ [tools] exception: {e}")
+            state["route_after_tools"] = "end"
             return state
+
+    async def _execute_single_tool(self, tool_call: Dict[str, Any]):
+        """Find and execute a single tool call from the aggregated tool list."""
+        name = tool_call.get("name")
+        args = dict(tool_call.get("args", {}) or {})
+        # Uniform status extraction: allow any tool to carry an optional status_message
+        status_message = args.pop("status_message", None)
+        try:
+            if (
+                status_message
+                and hasattr(self, "chat_handler")
+                and hasattr(self.chat_handler, "send_status")
+            ):
+                logger.info(f"🛎️ [tools] sending status_message: {status_message}")
+                await self.chat_handler.send_status(status_message, "working")
+                # Mirror status into chat bubble for immediate visibility in the UI
+                if hasattr(self.chat_handler, "send_message"):
+                    try:
+                        await self.chat_handler.send_message(
+                            f"[status] {status_message}"
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # Aggregate tools we bound
+        tools = (
+            getattr(self, "system_tools", [])
+            + getattr(self, "jupyter_tools", [])
+            + getattr(self, "mcp_tools", [])
+        )
+        for t in tools:
+            if t.name == name:
+                if asyncio.iscoroutinefunction(t.func):
+                    return await t.func(**args)
+                return t.func(**args)
+        return f"Tool {name} not found"
 
     def update_notebook_path(self, new_notebook_path: str):
         """Update tools and LLMs when notebook path changes"""
         logger.info(f"🔄 Updating notebook path to: {new_notebook_path}")
 
-        # Recreate tools with new notebook path
-        self.jupyter_tools = create_jupyter_tools(self.jupyter_tools_client, new_notebook_path)
+        # Recreate Jupyter tools with new notebook path
+        self.jupyter_tools = create_jupyter_tools(
+            self.jupyter_tools_client, new_notebook_path
+        )
+
+        # System tools depend only on chat handler; keep as-is
+        from .tools import create_system_tools
+
+        self.system_tools = create_system_tools(self.chat_handler)
+
+        # Recreate MCP tools if applicable (kept as-is here)
+        try:
+            from .tools.mcp_tools import create_mcp_tools
+
+            self.mcp_tools = create_mcp_tools(None)
+        except Exception:
+            self.mcp_tools = []
+
+        all_tools = self.system_tools + self.jupyter_tools + self.mcp_tools
 
         # Rebind tools to LLMs
         if self.openai_llm:
             self.openai_llm_with_tools = self.openai_llm.bind_tools(
-                self.jupyter_tools, parallel_tool_calls=False
+                all_tools, parallel_tool_calls=False
             )
         if self.anthropic_llm:
             self.anthropic_llm_with_tools = self.anthropic_llm.bind_tools(
-                self.jupyter_tools, parallel_tool_calls=False
+                all_tools, parallel_tool_calls=False
             )
 
-        # Rebuild workflow with new tools
+        # Rebuild workflow
         self.workflow = self._build_graph()
 
         logger.info(f"✅ Updated tools and workflow for notebook: {new_notebook_path}")
@@ -395,7 +568,7 @@ class DataAnalysisAgent:
                 f"🏁 Workflow completed with final state keys: {list(final_state.keys())}"
             )
 
-            # Extract result
+            # Extract result to return
             result = final_state.get("final_result", "Analysis completed")
 
             await self.chat_handler.send_status("✅ Analysis completed", "success")
@@ -408,196 +581,133 @@ class DataAnalysisAgent:
             return f"Error processing request: {e}"
 
     async def analyze_and_decide(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Core decision node - LLM analyzes context and decides next action"""
+        """Core decision node - LLM analyzes context and decides next action via tool calls"""
         try:
             print(f"🔥 ANALYZE_AND_DECIDE CALLED with state keys: {list(state.keys())}")
-            logger.info("🧠 Analyzing context and making decision...")
-
-            # Debug: Check state keys
-            logger.info(f"🔍 State keys at start: {list(state.keys())}")
-            logger.info(f"🔍 State values preview: {dict(list(state.items())[:5])}")
+            logger.info("🧠 [analyze_and_decide] start")
 
             # Update iteration counter for safety
             state = increment_iteration(state)
+            logger.info(
+                f"🧠 [analyze_and_decide] current_iteration={state.get('current_iteration')}\n"
+            )
 
-            # Ensure notebook_path is available
             notebook_path = state.get("notebook_path")
             if not notebook_path:
-                logger.error("❌ No notebook_path in state!")
-                logger.error(f"❌ Available state keys: {list(state.keys())}")
-                logger.error(f"❌ State dump: {state}")
-                state["next_action"] = "complete_analysis"
-                state["reasoning"] = "Missing notebook_path in state"
+                logger.error(
+                    "❌ [analyze_and_decide] missing notebook_path; routing to respond"
+                )
+                state["next_action"] = "respond"
                 return state
 
             # Always refresh notebook state
-            notebook_cells = (
-                await self.notebook_state_manager.get_complete_notebook_state(
-                    notebook_path
-                )
+            state[
+                "notebook_cells"
+            ] = await self.notebook_state_manager.get_complete_notebook_state(
+                notebook_path
             )
-            state["notebook_cells"] = notebook_cells
-
-            # HYPOTHESIS TEST: Log what cells are actually in the context
             logger.info(
-                f"🔍 CONTEXT ANALYSIS - Iteration {state.get('current_iteration', 0)}"
+                f"🧠 [analyze_and_decide] notebook_cells={len(state['notebook_cells'])} for path={notebook_path}"
             )
-            logger.info(f"🔍 Found {len(notebook_cells)} cells in notebook context:")
 
-            has_y_squared = False
-            has_y_cubed = False
-
-            for i, cell in enumerate(notebook_cells):
-                cell_type = cell.get("type", "unknown")
-                source = cell.get("source", "")
-                if isinstance(source, str) and len(source) > 100:
-                    source_preview = source[:100] + "..."
-                else:
-                    source_preview = source
-
-                logger.info(f"   Cell {i}: {cell_type} - {source_preview}")
-
-                # Check for the specific plots the user mentioned
-                source_str = str(source).lower()
-                if "y**2" in source_str or "**2" in source_str:
-                    has_y_squared = True
-                    logger.info(f"   ⚠️  FOUND y**2 plot in cell {i}")
-                if "y**3" in source_str or "x**3" in source_str or "**3" in source_str:
-                    has_y_cubed = True
-                    logger.info(f"   ⚠️  FOUND y**3/x**3 plot in cell {i}")
-
-            logger.info(
-                f"🔍 CONTEXT SUMMARY: y**2 present: {has_y_squared}, y**3 present: {has_y_cubed}"
-            )
-            logger.info(f"🔍 User request: {state['original_request']}")
-
-            # Get LLM instance (already has tools bound)
             provider = state.get("llm_provider", "openai")
             llm = (
                 self.openai_llm_with_tools
                 if provider == "openai"
                 else self.anthropic_llm_with_tools
             )
-
             if not llm:
                 raise ValueError(f"No LLM configured for provider: {provider}")
 
-            # DEBUG: Check what tools are available
-            print(f"🔥 TOOLS AVAILABLE: {len(self.jupyter_tools)} tools")
-            for i, tool in enumerate(self.jupyter_tools):
-                print(f"🔥 Tool {i+1}: {tool.name} - {tool.description}")
-
-            # Create context prompt (will be used as system message)
             context_prompt = self._create_context_prompt(state)
-
-            # LOG CONTEXT DETAILS
-            logger.info(f"🧠 Context prompt length: {len(context_prompt)} chars")
-            logger.info(f"🧠 Current iteration: {state.get('current_iteration', 0)}")
-            logger.info(
-                f"🧠 User request in context: {state.get('original_request', 'MISSING')}"
-            )
-            logger.info(f"🧠 Context prompt preview: {context_prompt[:500]}...")
-
-            # Initialize tool conversation messages if not present (separate from context)
             if "messages" not in state:
                 state["messages"] = []
 
-            # Clean up old messages to prevent conversation from getting too long
-            # Optional trimming: keep only the last N messages if configured
-            max_tool_messages = getattr(self, "max_tool_messages", None)
-            if isinstance(max_tool_messages, int) and max_tool_messages > 0:
-                if len(state["messages"]) > max_tool_messages:
-                    state["messages"] = state["messages"][-max_tool_messages:]
-                    logger.info(
-                        f"🧹 Trimmed tool messages to last {max_tool_messages} entries"
-                    )
-
-            # DEBUG: Log current messages
-            logger.info(f"🔍 Current tool messages in state: {len(state['messages'])}")
-            for i, msg in enumerate(state["messages"]):
-                if hasattr(msg, "role"):
-                    logger.info(
-                        f"   Message {i}: role={msg.role}, has_tool_calls={hasattr(msg, 'tool_calls') and bool(msg.tool_calls)}"
-                    )
-                else:
-                    logger.info(f"   Message {i}: {type(msg)} - {str(msg)[:100]}")
-
-            # Prepare messages for LLM: system context + tool conversation
             system_message = {"role": "system", "content": context_prompt}
-            conversation_messages = [system_message] + state["messages"]
-
-            logger.info(
-                f"🧠 Total conversation messages: {len(conversation_messages)} (1 system + {len(state['messages'])} tool messages)"
+            user_message = None
+            if state.get("original_request"):
+                user_message = {"role": "user", "content": state["original_request"]}
+            conversation_messages = (
+                [system_message]
+                + ([user_message] if user_message else [])
+                + state["messages"]
             )
 
-            # Get LLM response
-            print(f"🔥 CALLING LLM WITH {len(conversation_messages)} MESSAGES")
+            logger.warning(
+                f"🧠 [analyze_and_decide] invoking LLM with messages={len(conversation_messages)} (system+{len(state['messages'])})"
+            )
+            logger.warning(
+                f"conversation_messages={conversation_messages}\n"
+                f"state['messages']={state['messages']}"
+                f" bound_tools={getattr(llm, '_bound_tool_names', [])}"
+            )
+            # Introspect the bound runnable to fetch the raw OpenAI tools payload, if available
+            try:
+                raw_tools = []
+                if hasattr(llm, "kwargs") and isinstance(getattr(llm, "kwargs"), dict):
+                    raw_tools = llm.kwargs.get("tools", []) or []
+                tool_names_from_llm = []
+                for t in raw_tools:
+                    fn = t.get("function", {}) if isinstance(t, dict) else {}
+                    name = fn.get("name") if isinstance(fn, dict) else None
+                    if name:
+                        tool_names_from_llm.append(name)
+                self_tool_names = [
+                    t.name
+                    for t in (
+                        getattr(self, "system_tools", [])
+                        + getattr(self, "jupyter_tools", [])
+                        + getattr(self, "mcp_tools", [])
+                    )
+                ]
+                logger.warning(
+                    f"introspected_llm_tools={tool_names_from_llm} self_tools={self_tool_names}"
+                )
+                # Detailed schema dump
+                detailed = self._list_bound_tools_and_params(llm)
+                logger.warning(f"tool_schemas={detailed}")
+            except Exception as _e:
+                logger.warning(f"tool introspection failed: {_e}")
             tool_response = await llm.ainvoke(conversation_messages)
-            print(f"�� LLM RESPONSE TYPE: {type(tool_response)}")
-            print(f"🔥 LLM RESPONSE HAS TOOL_CALLS: {hasattr(tool_response, 'tool_calls')}")
-            if hasattr(tool_response, 'tool_calls'):
-                print(f"🔥 TOOL_CALLS COUNT: {len(tool_response.tool_calls) if tool_response.tool_calls else 0}")
-            print(f"🔥 LLM RESPONSE CONTENT: {tool_response.content[:200] if tool_response.content else 'NO CONTENT'}")
 
-            if tool_response.tool_calls:
-                # LLM wants to use tools
-                print(f"🔥 LLM REQUESTED {len(tool_response.tool_calls)} TOOL CALLS")
-                state["next_action"] = "tools"
-                if tool_response.content:
-                    await self.chat_handler.send_status(tool_response.content)
-
-                # LOG DETAILED TOOL CALL INFO
-                logger.info(
-                    f"🔧 LLM requested {len(tool_response.tool_calls)} tool calls"
-                )
-                for i, tool_call in enumerate(tool_response.tool_calls):
-                    print(
-                        f"🔥 TOOL {i + 1}: {tool_call.get('name', 'unknown')} - {tool_call.get('args', {})}"
+            # Log tool_calls summary and details BEFORE any mutation
+            tc = getattr(tool_response, "tool_calls", []) or []
+            logger.warning(
+                f"🧠 [analyze_and_decide] LLM returned tool_calls={len(tc)} names={[c.get('name') for c in tc]}"
+            )
+            for idx, c in enumerate(tc):
+                try:
+                    logger.warning(
+                        f"🧠 [analyze_and_decide] tool[{idx}] id={c.get('id')} name={c.get('name')} args={c.get('args')}"
                     )
-                    logger.info(
-                        f"   Tool {i + 1}: {tool_call.get('name', 'unknown')} - {tool_call.get('args', {})}"
+                except Exception:
+                    logger.warning(
+                        f"🧠 [analyze_and_decide] tool[{idx}] (unprintable args)"
                     )
+            if tool_response.content:
+                cpreview = tool_response.content[:200].replace("\n", " ")
+                logger.warning(f"🧠 [analyze_and_decide] content preview='{cpreview}'")
 
-                # Add the LLM response with tool calls to tool conversation (NOT including system message)
-                state["messages"].append(tool_response)
-
-            else:
-                # Get structured decision using LLMDecision schema (use base LLM without tools for structured output)
-                base_llm = (
-                    self.openai_llm if provider == "openai" else self.anthropic_llm
-                )
-                llm_with_schema = base_llm.with_structured_output(LLMDecision)
-                decision = await llm_with_schema.ainvoke([system_message])
-
-                # DEBUG: Log the decision details
-                logger.info("🎯 LLM Decision Details:")
-                logger.info(f"   Action: {decision.action}")
-                logger.info(f"   Reasoning: {decision.reasoning}")
-                logger.info(f"   Status Message: {decision.status_message}")
-                logger.info(
-                    f"   User Request in State: {state.get('original_request', 'MISSING')}"
-                )
-
-                state["next_action"] = decision.action
-                state["reasoning"] = decision.reasoning
-
-                # Store action-specific data
-                if decision.message:
-                    state["response_message"] = decision.message
-                if decision.plan_steps:
-                    state["plan_steps"] = decision.plan_steps
-
-                # Send status update (except for respond action)
-                if decision.status_message and decision.action != "respond":
-                    await self.chat_handler.send_status(decision.status_message)
-
-                logger.info(f"🎯 Decision: {decision.action} - {decision.reasoning}")
-
+            # Always append the AI tool message; execution/validation will enforce the contrac
+            state["messages"].append(tool_response)
+            # If no tool_calls, inject a short nudge for the self-loop path (retry cap handled by routing)
+            if not getattr(tool_response, "tool_calls", []):
+                attempts = state.get("correction_attempts", 0) + 1
+                state["correction_attempts"] = attempts
+                if attempts <= 3:
+                    nudge = {
+                        "role": "system",
+                        "content": "Call exactly one tool now. Include a short status_message describing the step.",
+                    }
+                    state["messages"].append(nudge)
+            logger.info(
+                "🧠 [analyze_and_decide] appended AI message; ready for tools or retry"
+            )
             return state
 
         except Exception as e:
-            logger.error(f"❌ Error in analyze_and_decide: {e}")
-            state["next_action"] = "complete_analysis"
+            logger.error(f"❌ [analyze_and_decide] exception: {e}")
+            state["next_action"] = "respond"
             state["reasoning"] = f"Error occurred: {e}"
             return state
 
@@ -609,37 +719,47 @@ class DataAnalysisAgent:
         )
 
         prompt = f"""
-You are a data analysis agent working in JupyterLab. Analyze the current context and decide what to do next.
+ You are a data analysis agent working in JupyterLab. Decide what to do next and EXPRESS your decision via TOOL CALLS ONLY.
 
-**User Request:** {state["original_request"]}
+ Tool-calling contract (STRICT):
+ - Produce exactly ONE tool call per turn.
+ - Include a short status_message in the tool args, summarizing the step you are about to perform.
+ - Never emit plain-text answers unless you are explicitly using RespondToUser. If you intend to finish, call RespondToUser(intent="completion").
+ If a single user request requires multiple actions, emit one tool at a time and rely on the next turn to continue. Do NOT emit multiple tools in a single turn.
+ If you previously returned no tools, correct yourself by emitting exactly one valid tool call now.
 
-**Current Notebook State:**
-{notebook_summary}
+ CONTRACT (per turn):
+ - Call EXACTLY ONE tool from this set: Jupyter tools, Snowflake tools, RespondToUser, CreatePlan.
+ - Use RespondToUser(intent="completion") when you are finished.
+ - Always include a concise status_message in the tool args to communicate progress to the user.
 
-**Conversation History:**
-{conversation_summary}
+ Example (format only):
+ - Assistant tool_calls:
+   - insert_and_execute_cell(code="import matplotlib.pyplot as plt\n...", cell_type="code", position="end", status_message="Insert new code cell to plot x vs x**2")
 
-**Current Iteration:** {state.get("current_iteration", 0)}
+ Available payload tool categories:
+ - Jupyter tools: insert_and_execute_cell, delete_cell, etc.
+ - Snowflake tools: query_snowflake, list_snowflake_tables, get_table_schema, get_database_info
+ - RespondToUser(message, intent?)
+ - CreatePlan(plan_steps)
 
-**Available Actions:**
-1. **tools** - Use Jupyter notebook tools (insert/execute code, delete cells, etc.)
-2. **create_plan** - Create a structured analysis plan with steps
-3. **respond** - Send a conversational message to the user
-4. **complete** - Finish the analysis
+ Guidance:
+ - Use Jupyter tools for notebook edits/execution.
+ - Use Snowflake tools for external data queries.
+ - Use RespondToUser to talk to the user (clarifications, updates). For completion, call RespondToUser(intent="completion").
+ - Use CreatePlan to present a multi-step plan (explicit plan_steps).
 
-**Instructions:**
-- IMPORTANT: If the user is asking for code, plots, data analysis, or any computational task, you MUST use "tools" action
-- If you need to manipulate the notebook (add code, execute, etc.), use "tools" action
-- If the user needs a plan for complex analysis, use "create_plan" action
-- If you need to ask questions or provide updates, use "respond" action
-- ONLY use "complete" action if the user's request has been fully satisfied with working code and results
-- Always provide clear reasoning for your decision
-- For tool actions, provide a helpful status message describing what you're doing
-- The notebook state above is current - avoid calling get_notebook_cells unless you need fresh data
-- When inserting cells, use position="end" to add at the bottom of the notebook
-- Focus on the user's specific request rather than creating duplicate or similar code
+ Contex
+ --------
+ User Request: {state["original_request"]}
 
-**CRITICAL: For requests like "plot x,y**2" or any data visualization/analysis, you MUST use "tools" action to insert and execute the necessary Python code.**
+ Current Notebook State:
+ {notebook_summary}
+
+ Conversation History:
+ {conversation_summary}
+
+ Current Iteration: {state.get("current_iteration", 0)}
 """
         return prompt
 

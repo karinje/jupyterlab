@@ -88,3 +88,20 @@ class ListTablesArgs(BaseModel):
         default=None,
         description="Schema name (renamed from 'schema' to avoid Pydantic warning)",
     )
+
+
+class RespondToUserArgs(BaseModel):
+    """Arguments for RespondToUser tool"""
+
+    message: str = Field(description="Message to show to the user in chat")
+    intent: Optional[Literal["completion", "clarification", "status_update"]] = Field(
+        default=None, description="Optional intent tag for the response"
+    )
+
+
+class CreatePlanArgs(BaseModel):
+    """Arguments for CreatePlan tool"""
+
+    plan_steps: List[PlanStepOutput] = Field(
+        description="List of plan steps to render as editable cards"
+    )
