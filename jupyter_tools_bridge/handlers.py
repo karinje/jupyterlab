@@ -17,11 +17,17 @@ from jupyter_server.base.handlers import APIHandler
 from jupyter_ydoc import YNotebook
 from jupyter_client import KernelManager, BlockingKernelClient
 
-logger = logging.getLogger(__name__)
+# Use ServerApp logger so INFO messages show up
+# logger = logging.getLogger(__name__)
 
 
 class BaseToolsHandler(APIHandler):
     """Base handler with common functionality for tools operations."""
+
+    @property
+    def log(self):
+        """Get the ServerApp logger."""
+        return self.settings.get("serverapp").log if self.settings.get("serverapp") else logging.getLogger(__name__)
 
     @property
     def kernel_manager(self) -> KernelManager:
@@ -30,7 +36,7 @@ class BaseToolsHandler(APIHandler):
 
     def _ynb_attr(self, ynb: YNotebook, name: str) -> bool:
         has = hasattr(ynb, name)
-        logger.info(f"[ynb_attr] {name} present? {has}")
+        # logger.info(f"[ynb_attr] {name} present? {has}")
         return has
 
     def ynb_cell_count(self, ynb: YNotebook) -> int:
@@ -40,42 +46,45 @@ class BaseToolsHandler(APIHandler):
             if self._ynb_attr(ynb, "ycells"):
                 try:
                     n = len(ynb.ycells)  # YArray-like
-                    logger.info(f"[ynb_cell_count] via ycells -> {n}")
+                    # logger.info(f"[ynb_cell_count] via ycells -> {n}")
                     return n
                 except Exception as e:
-                    logger.error(f"[ynb_cell_count] len(ycells) failed: {e}")
+                    # logger.error(f"[ynb_cell_count] len(ycells) failed: {e}")
+                    pass
             if self._ynb_attr(ynb, "cells"):
                 try:
                     n = len(ynb.cells)
-                    logger.info(f"[ynb_cell_count] via cells -> {n}")
+                    # logger.info(f"[ynb_cell_count] via cells -> {n}")
                     return n
                 except Exception as e:
-                    logger.error(f"[ynb_cell_count] len(cells) failed: {e}")
+                    # logger.error(f"[ynb_cell_count] len(cells) failed: {e}")
+                    pass
             # Fallback: probe with get_cell until it fails
             if self._ynb_attr(ynb, "get_cell"):
                 i = 0
                 while True:
                     try:
                         c = ynb.get_cell(i)
-                        logger.debug(
-                            f"[ynb_cell_count] probe index {i} -> {'ok' if c is not None else 'none'}"
-                        )
+                        # logger.debug(
+                        #     f"[ynb_cell_count] probe index {i} -> {'ok' if c is not None else 'none'}"
+                        # )
                         if c is None:
                             break
                         i += 1
                     except Exception:
                         break
-                logger.info(f"[ynb_cell_count] via get_cell loop -> {i}")
+                # logger.info(f"[ynb_cell_count] via get_cell loop -> {i}")
                 return i
         except Exception as e:
-            logger.error(f"[ynb_cell_count] error: {e}")
-        logger.info("[ynb_cell_count] default 0")
+            # logger.error(f"[ynb_cell_count] error: {e}")
+            pass
+        # logger.info("[ynb_cell_count] default 0")
         return 0
 
     def iter_cells(self, ynb: YNotebook):
         """Yield (index, cell_dict) for all cells with verbose logging."""
         n = self.ynb_cell_count(ynb)
-        logger.info(f"[iter_cells] count={n}")
+        # logger.info(f"[iter_cells] count={n}")
         for i in range(n):
             cell = None
             try:
@@ -87,13 +96,13 @@ class BaseToolsHandler(APIHandler):
                     # ycells might contain structured entries; try direct
                     cell = ynb.ycells[i]
                 else:
-                    logger.error("[iter_cells] no way to access cells")
+                    # logger.error("[iter_cells] no way to access cells")
                     break
-                logger.debug(
-                    f"[iter_cells] i={i} type={type(cell)} keys={list(cell.keys()) if isinstance(cell, dict) else 'n/a'}"
-                )
+                # logger.debug(
+                #     f"[iter_cells] i={i} type={type(cell)} keys={list(cell.keys()) if isinstance(cell, dict) else 'n/a'}"
+                # )
             except Exception as e:
-                logger.error(f"[iter_cells] failed to read cell {i}: {e}")
+                # logger.error(f"[iter_cells] failed to read cell {i}: {e}")
                 break
             yield i, cell
 
@@ -111,39 +120,29 @@ class BaseToolsHandler(APIHandler):
             The live YNotebook instance or None if not found
         """
         try:
-            logger.info(f"[get_live_notebook] start path={path}")
-            logger.info(
-                f"[get_live_notebook] settings keys={list(self.settings.keys())}"
-            )
+            self.log.info(f"[get_live_notebook] start path={path}")
+            self.log.info(f"[get_live_notebook] settings keys={list(self.settings.keys())}")
 
             # Try order: settings['ydoc_extension'] -> settings['jupyter_server_ydoc'] -> extension_manager -> singleton
             ydoc_ext = None
 
             # 1) Stored by our extension loader
             ydoc_ext = self.settings.get("ydoc_extension")
-            logger.info(
-                f"[get_live_notebook] ydoc_extension in settings? {'yes' if ydoc_ext else 'no'}"
-            )
+            self.log.info(f"[get_live_notebook] ydoc_extension in settings? {'yes' if ydoc_ext else 'no'}")
 
             # 2) Directly provided by jupyter_server_ydoc in settings
             if not ydoc_ext:
                 ydoc_ext = self.settings.get("jupyter_server_ydoc")
-                logger.info(
-                    f"[get_live_notebook] jupyter_server_ydoc in settings? {'yes' if ydoc_ext else 'no'}"
-                )
+                self.log.info(f"[get_live_notebook] jupyter_server_ydoc in settings? {'yes' if ydoc_ext else 'no'}")
 
             # 3) Extension manager (metadata objects only, but log for visibility)
             if not ydoc_ext:
                 serverapp = self.settings.get("serverapp")
-                logger.info(
-                    f"[get_live_notebook] serverapp present? {'yes' if serverapp else 'no'}"
-                )
+                self.log.info(f"[get_live_notebook] serverapp present? {'yes' if serverapp else 'no'}")
                 if serverapp and hasattr(serverapp, "extension_manager"):
                     ext_manager = serverapp.extension_manager
                     names = list(getattr(ext_manager, "extensions", {}).keys())
-                    logger.info(
-                        f"[get_live_notebook] extension_manager extensions={names}"
-                    )
+                    self.log.info(f"[get_live_notebook] extension_manager extensions={names}")
                     # NOTE: These are ExtensionPackage instances, not live extension; do not use directly
 
             # 4) Last resort: singleton
@@ -152,57 +151,39 @@ class BaseToolsHandler(APIHandler):
                     from jupyter_server_ydoc import YDocExtension
 
                     ydoc_ext = YDocExtension.instance()
-                    logger.info(
-                        f"[get_live_notebook] YDocExtension.instance() -> {'ok' if ydoc_ext else 'none'}"
-                    )
+                    self.log.info(f"[get_live_notebook] YDocExtension.instance() -> {'ok' if ydoc_ext else 'none'}")
                 except Exception as e:
-                    logger.error(
-                        f"[get_live_notebook] YDocExtension.instance() failed: {e}"
-                    )
+                    self.log.error(f"[get_live_notebook] YDocExtension.instance() failed: {e}")
 
             if not ydoc_ext:
-                logger.error(
-                    "[get_live_notebook] Could not obtain YDocExtension by any method"
-                )
+                self.log.error("[get_live_notebook] Could not obtain YDocExtension by any method")
                 return None
 
             has_get_doc = hasattr(ydoc_ext, "get_document")
-            logger.info(
-                f"[get_live_notebook] ydoc_ext type={type(ydoc_ext)}, has get_document? {has_get_doc}"
-            )
+            self.log.info(f"[get_live_notebook] ydoc_ext type={type(ydoc_ext)}, has get_document? {has_get_doc}")
             if not has_get_doc:
-                logger.error(
-                    "[get_live_notebook] YDocExtension object has no get_document - cannot proceed"
-                )
+                self.log.error("[get_live_notebook] YDocExtension object has no get_document - cannot proceed")
                 return None
 
-            logger.info(
-                f"[get_live_notebook] calling get_document(path={path}, copy=False)"
-            )
+            self.log.info(f"[get_live_notebook] calling get_document(path={path}, copy=False)")
             ydoc = await ydoc_ext.get_document(
                 path=path, content_type="notebook", file_format="json", copy=False
             )
-            logger.info(
-                f"[get_live_notebook] get_document returned type={type(ydoc) if ydoc else None}"
-            )
+            self.log.info(f"[get_live_notebook] get_document returned type={type(ydoc) if ydoc else None}")
 
             if ydoc is None:
-                logger.error(
-                    f"[get_live_notebook] get_document returned None (notebook likely not open): {path}"
-                )
+                self.log.error(f"[get_live_notebook] get_document returned None (notebook likely not open): {path}")
                 return None
 
             if not isinstance(ydoc, YNotebook):
-                logger.error(
-                    f"[get_live_notebook] object is not YNotebook: {type(ydoc)}"
-                )
+                self.log.error(f"[get_live_notebook] object is not YNotebook: {type(ydoc)}")
                 return None
 
-            logger.info(f"[get_live_notebook] SUCCESS live YNotebook for {path}")
+            self.log.info(f"[get_live_notebook] SUCCESS live YNotebook for {path}")
             return ydoc
 
         except Exception as e:
-            logger.error(f"[get_live_notebook] Failed: {e}", exc_info=True)
+            self.log.error(f"[get_live_notebook] Failed: {e}", exc_info=True)
             return None
 
     def get_kernel_client(self, kernel_id: str) -> Optional[BlockingKernelClient]:
@@ -225,7 +206,7 @@ class BaseToolsHandler(APIHandler):
             return client
 
         except Exception as e:
-            logger.error(f"Failed to get kernel client for {kernel_id}: {e}")
+            # logger.error(f"Failed to get kernel client for {kernel_id}: {e}")
             return None
 
     def generate_cell_id(self) -> str:
@@ -276,7 +257,7 @@ class BaseToolsHandler(APIHandler):
             }
 
         else:
-            logger.warning(f"Unknown message type: {msg_type}")
+            # logger.warning(f"Unknown message type: {msg_type}")
             return None
 
 
@@ -336,7 +317,7 @@ class InsertCellHandler(BaseToolsHandler):
                 notebook.set_ycell(idx, ycell)
                 actual_index = idx
 
-            logger.info(f"Inserted {cell_type} cell at index {actual_index} in {path}")
+            # logger.info(f"Inserted {cell_type} cell at index {actual_index} in {path}")
 
             self.finish(
                 json.dumps(
@@ -347,7 +328,7 @@ class InsertCellHandler(BaseToolsHandler):
         except HTTPError:
             raise
         except Exception as e:
-            logger.error(f"Error inserting cell: {e}", exc_info=True)
+            # logger.error(f"Error inserting cell: {e}", exc_info=True)
             raise HTTPError(500, str(e))
 
 
@@ -402,14 +383,14 @@ class UpdateCellHandler(BaseToolsHandler):
 
             notebook.set_cell(target_index, cell)
 
-            logger.info(f"Updated cell at index {target_index} in {path}")
+            # logger.info(f"Updated cell at index {target_index} in {path}")
 
             self.finish(json.dumps({"status": "success", "index": target_index}))
 
         except HTTPError:
             raise
         except Exception as e:
-            logger.error(f"Error updating cell: {e}", exc_info=True)
+            # logger.error(f"Error updating cell: {e}", exc_info=True)
             raise HTTPError(500, str(e))
 
 
@@ -461,9 +442,9 @@ class DeleteCellHandler(BaseToolsHandler):
             before = self.ynb_cell_count(notebook)
             notebook.ycells.pop(target_index)
             after = self.ynb_cell_count(notebook)
-            logger.info(
-                f"Deleted cell at index {target_index} from {path} (count {before} -> {after})"
-            )
+            # logger.info(
+            #     f"Deleted cell at index {target_index} from {path} (count {before} -> {after})"
+            # )
 
             self.finish(
                 json.dumps(
@@ -478,7 +459,7 @@ class DeleteCellHandler(BaseToolsHandler):
         except HTTPError:
             raise
         except Exception as e:
-            logger.error(f"Error deleting cell: {e}", exc_info=True)
+            # logger.error(f"Error deleting cell: {e}", exc_info=True)
             raise HTTPError(500, str(e))
 
 
@@ -543,13 +524,13 @@ class ExecuteCellHandler(BaseToolsHandler):
 
                 # Execute the code
                 code = cell.get("source", "")
-                logger.info(f"[execute] sending execute_request, len(code)={len(code)}")
+                # logger.info(f"[execute] sending execute_request, len(code)={len(code)}")
                 msg_id = client.execute(
                     code, store_history=True, allow_stdin=False, stop_on_error=False
                 )
                 if hasattr(msg_id, "__await__"):
                     msg_id = await msg_id
-                logger.info(f"[execute] got msg_id={msg_id}")
+                # logger.info(f"[execute] got msg_id={msg_id}")
 
                 outputs = []
                 execution_count = None
@@ -561,9 +542,9 @@ class ExecuteCellHandler(BaseToolsHandler):
                         msg = await raw if hasattr(raw, "__await__") else raw
 
                         if not isinstance(msg, dict):
-                            logger.warning(
-                                f"[execute] unexpected msg type: {type(msg)}"
-                            )
+                            # logger.warning(
+                            #     f"[execute] unexpected msg type: {type(msg)}"
+                            # )
                             continue
 
                         if msg.get("parent_header", {}).get("msg_id") != msg_id:
@@ -575,7 +556,7 @@ class ExecuteCellHandler(BaseToolsHandler):
                         # Always capture execution_count from execute_input at start of execution
                         if msg_type == "execute_input":
                             ec = content.get("execution_count")
-                            logger.info(f"[execute] execute_input exec_count={ec}")
+                            # logger.info(f"[execute] execute_input exec_count={ec}")
                             if ec is not None:
                                 execution_count = ec
                                 if stream_outputs:
@@ -606,12 +587,12 @@ class ExecuteCellHandler(BaseToolsHandler):
                         ):
                             break
                     except TimeoutError:
-                        logger.warning("Timeout waiting for kernel response")
+                        # logger.warning("Timeout waiting for kernel response")
                         break
                     except Exception as e:
-                        logger.error(
-                            f"[execute] error reading IOPub: {e}", exc_info=True
-                        )
+                        # logger.error(
+                        #     f"[execute] error reading IOPub: {e}", exc_info=True
+                        # )
                         break
 
                 # Final update with all outputs
@@ -621,7 +602,7 @@ class ExecuteCellHandler(BaseToolsHandler):
                         cell["execution_count"] = execution_count
                     notebook.set_cell(target_index, cell)
 
-                logger.info(f"Executed cell at index {target_index} in {path}")
+                # logger.info(f"Executed cell at index {target_index} in {path}")
 
                 self.finish(
                     json.dumps(
@@ -642,12 +623,13 @@ class ExecuteCellHandler(BaseToolsHandler):
                         if hasattr(stopped, "__await__"):
                             await stopped
                 except Exception as e:
-                    logger.warning(f"stop_channels failed: {e}")
+                    # logger.warning(f"stop_channels failed: {e}")
+                    pass
 
         except HTTPError:
             raise
         except Exception as e:
-            logger.error(f"Error executing cell: {e}", exc_info=True)
+            # logger.error(f"Error executing cell: {e}", exc_info=True)
             raise HTTPError(500, str(e))
 
 
@@ -673,7 +655,7 @@ class GetNotebookStateHandler(BaseToolsHandler):
             try:
                 for i, cell in self.iter_cells(notebook):
                     if not isinstance(cell, dict):
-                        logger.info(f"[state] non-dict cell at {i}: {type(cell)}")
+                        # logger.info(f"[state] non-dict cell at {i}: {type(cell)}")
                         continue
                     cell_info = {
                         "index": i,
@@ -689,7 +671,8 @@ class GetNotebookStateHandler(BaseToolsHandler):
                         cell_info["outputs_count"] = len(cell.get("outputs", []))
                     cells_summary.append(cell_info)
             except Exception as e:
-                logger.error(f"[state] failed to iterate cells: {e}")
+                # logger.error(f"[state] failed to iterate cells: {e}")
+                pass
 
             self.finish(
                 json.dumps(
@@ -705,7 +688,7 @@ class GetNotebookStateHandler(BaseToolsHandler):
         except HTTPError:
             raise
         except Exception as e:
-            logger.error(f"Error getting notebook state: {e}", exc_info=True)
+            # logger.error(f"Error getting notebook state: {e}", exc_info=True)
             raise HTTPError(500, str(e))
 
 
@@ -738,7 +721,7 @@ class GetActiveSessionsHandler(BaseToolsHandler):
             self.finish(json.dumps({"status": "success", "sessions": sessions}))
 
         except Exception as e:
-            logger.error(f"Error getting sessions: {e}", exc_info=True)
+            # logger.error(f"Error getting sessions: {e}", exc_info=True)
             raise HTTPError(500, str(e))
 
 
@@ -800,9 +783,9 @@ class SaveNotebookHandler(BaseToolsHandler):
 
             model = {"type": "notebook", "format": "json", "content": nb}
 
-            logger.info(f"[save] saving notebook: {path} (cells={len(cells)})")
+            # logger.info(f"[save] saving notebook: {path} (cells={len(cells)})")
             await contents_manager.save(model, path)
-            logger.info(f"[save] saved notebook: {path}")
+            # logger.info(f"[save] saved notebook: {path}")
 
             self.finish(
                 json.dumps(
@@ -817,7 +800,7 @@ class SaveNotebookHandler(BaseToolsHandler):
         except HTTPError:
             raise
         except Exception as e:
-            logger.error(f"Error saving notebook: {e}", exc_info=True)
+            # logger.error(f"Error saving notebook: {e}", exc_info=True)
             raise HTTPError(500, str(e))
 
 

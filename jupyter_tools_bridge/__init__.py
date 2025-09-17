@@ -25,19 +25,41 @@ def _load_jupyter_server_extension(server_app):
     # Store references in settings for handlers to access
     web_app.settings["kernel_manager"] = server_app.kernel_manager
     web_app.settings["session_manager"] = server_app.session_manager
+    web_app.settings["contents_manager"] = server_app.contents_manager
     web_app.settings["serverapp"] = server_app  # Store server app reference
 
     # Try to get YDocExtension instance and store it in settings
     try:
         from jupyter_server_ydoc import YDocExtension
 
-        # YDocExtension should already be loaded at this point
-        ydoc_ext = YDocExtension.instance()
+        # Try multiple approaches to get YDoc extension
+        ydoc_ext = None
+        
+        # Approach 1: Try getting from extension manager first
+        try:
+            if hasattr(server_app, 'extension_manager'):
+                for ext_name, ext_instance in server_app.extension_manager.extensions.items():
+                    if isinstance(ext_instance, YDocExtension):
+                        ydoc_ext = ext_instance
+                        server_app.log.info(f"Found YDocExtension via extension_manager: {ext_name}")
+                        break
+        except Exception as e:
+            server_app.log.debug(f"Extension manager approach failed: {e}")
+        
+        # Approach 2: Fallback to singleton (may fail due to conflicts)
+        if not ydoc_ext:
+            try:
+                ydoc_ext = YDocExtension.instance()
+                if ydoc_ext:
+                    server_app.log.info("Got YDocExtension via instance() method")
+            except Exception as e:
+                server_app.log.debug(f"Singleton approach failed: {e}")
+
         if ydoc_ext:
             web_app.settings["ydoc_extension"] = ydoc_ext
-            server_app.log.info("Stored YDocExtension instance in settings")
+            server_app.log.info("✅ Stored YDocExtension instance in settings")
         else:
-            server_app.log.warning("YDocExtension.instance() returned None")
+            server_app.log.warning("❌ Could not obtain YDocExtension instance")
     except Exception as e:
         server_app.log.error(f"Failed to get YDocExtension: {e}")
 

@@ -310,72 +310,61 @@ class ConversationManager:
     async def _save_conversations_to_notebook(
         self, notebook_path: str, conversations: Dict
     ):
-        """Save conversations back to notebook metadata"""
+        """Save conversations back to notebook metadata using YDoc to avoid file/live state conflicts"""
         try:
-            import aiohttp
+            # Get YDoc extension from web_app settings (same fallback pattern as tools bridge)
+            ydoc_ext = None
+            
+            # Try 1: From tools bridge storage (may not exist due to singleton issues)
+            ydoc_ext = self.serverapp.web_app.settings.get("ydoc_extension")
+            if ydoc_ext:
+                logger.info("✅ Found YDoc extension in web_app.settings['ydoc_extension']")
+            else:
+                logger.info("❌ YDoc extension not found in web_app.settings['ydoc_extension']")
+                
+                # Try 2: From jupyter_server_ydoc in settings (this should work)
+                ydoc_ext = self.serverapp.web_app.settings.get("jupyter_server_ydoc")
+                if ydoc_ext:
+                    logger.info("✅ Found YDoc extension in web_app.settings['jupyter_server_ydoc']")
+                else:
+                    logger.error("❌ YDoc extension not found in web_app.settings['jupyter_server_ydoc'] either")
+                    logger.error(f"Available settings keys: {list(self.serverapp.web_app.settings.keys())}")
+                    return
 
-            server_url = f"http://127.0.0.1:{self.serverapp.port}"
-            token = self._get_server_token()
-            headers = {"Authorization": f"token {token}"}
-
-            async with aiohttp.ClientSession() as session:
-                # Get current notebook
-                async with session.get(
-                    f"{server_url}/api/contents/{notebook_path}", headers=headers
-                ) as resp:
-                    if resp.status != 200:
-                        logger.error(
-                            f"Failed to load notebook for saving: {resp.status}"
-                        )
-                        return
-
-                    notebook_data = await resp.json()
-
-                # Update metadata
-                if "metadata" not in notebook_data["content"]:
-                    notebook_data["content"]["metadata"] = {}
-                notebook_data["content"]["metadata"]["chat_conversations"] = (
-                    conversations
+            # Get live YDoc document (this is the authoritative live state)
+            try:
+                ydoc = await ydoc_ext.get_document(
+                    path=notebook_path,
+                    content_type="notebook",
+                    file_format="json",
+                    copy=False  # Get reference to live document, not a copy
                 )
+            except Exception as e:
+                logger.error(f"Failed to get YDoc for {notebook_path}: {e}")
+                return
 
-                # Sanitize cells to avoid nbformat save errors (attachments None, outputs type)
-                try:
-                    cells = notebook_data["content"].get("cells", [])
-                    for c in cells:
-                        if not isinstance(c.get("metadata"), dict):
-                            c["metadata"] = {}
-                        if c.get("attachments") is None:
-                            c["attachments"] = {}
-                        ct = c.get("cell_type")
-                        if ct == "code":
-                            if not isinstance(c.get("outputs"), list):
-                                c["outputs"] = []
-                        else:
-                            if "outputs" in c and c["outputs"] is None:
-                                del c["outputs"]
-                except Exception as _e:
-                    logger.warning(f"conversation save sanitation failed: {_e}")
+            # Get current notebook state from YDoc
+            current_notebook = ydoc.get()
+            if not current_notebook or not isinstance(current_notebook, dict):
+                logger.error(f"Invalid notebook state in YDoc for {notebook_path}")
+                return
 
-                # Save notebook
-                save_data = {"type": "notebook", "content": notebook_data["content"]}
+            # Update ONLY metadata, leave cells untouched
+            if "metadata" not in current_notebook:
+                current_notebook["metadata"] = {}
 
-                put_headers = dict(headers)
-                if self._xsrf_token:
-                    put_headers["X-XSRFToken"] = self._xsrf_token
-                async with session.put(
-                    f"{server_url}/api/contents/{notebook_path}",
-                    headers=put_headers,
-                    json=save_data,
-                ) as resp:
-                    if resp.status != 200:
-                        logger.error(
-                            f"Failed to save notebook conversations: {resp.status}"
-                        )
-                    else:
-                        logger.info(f"💾 Saved conversation to {notebook_path}")
+            current_notebook["metadata"]["chat_conversations"] = conversations
+
+            # Update YDoc live state (this preserves all cells and only updates metadata)
+            ydoc.set(current_notebook)
+
+            logger.info(f"💾 Saved conversation metadata to YDoc live state: {notebook_path}")
+            logger.info(f"📝 Conversation threads: {list(conversations.keys()) if isinstance(conversations, dict) else 'N/A'}")
 
         except Exception as e:
-            logger.error(f"Error saving conversations to notebook: {e}")
+            logger.error(f"Error saving conversations to YDoc: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
 
 class ChatStatusHandler(APIHandler):
@@ -507,11 +496,13 @@ class ChatMessageHandler(APIHandler):
                                         ):
                                             notebook_path = sessions[0].get("path")
                     if notebook_path and message_text:
+                        # Save assistant message to YDoc metadata (fixed race condition)
                         conv = ConversationManager(self.serverapp)
                         await conv.save_conversation_message(
                             notebook_path,
                             {"role": "assistant", "content": message_text},
                         )
+
                         # Broadcast live assistant message
                         try:
                             targets = []
@@ -707,10 +698,9 @@ class ChatOpenAIHandler(APIHandler):
                 mcp_servers_config,
                 provider,
             )
-            # Skip saving assistant to metadata for now to avoid reintroducing history
-            logger.warning(
-                "💾 Skipping assistant message save to notebook metadata (temp)"
-            )
+
+            # Note: Assistant message is already saved by RespondToUser tool via ChatMessageHandler
+            # No need to save again here to avoid duplicates
 
             # Return response
             response_data = {

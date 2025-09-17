@@ -70,12 +70,11 @@ class ChatHandler:
     async def send_message(
         self,
         message: str,
-        *,
         notebook_path: Optional[str] = None,
         tool_call_id: Optional[str] = None,
         thread_id: Optional[str] = None,
     ):
-        """Send message to chat UI"""
+        """Send a message to the chat UI"""
         try:
             import aiohttp
 
@@ -84,7 +83,7 @@ class ChatHandler:
                 headers["Authorization"] = f"token {self.token}"
 
             async with aiohttp.ClientSession() as session:
-                await session.post(
+                response = await session.post(
                     f"{self.server_url}/api/chat/message",
                     json={
                         "content": message,
