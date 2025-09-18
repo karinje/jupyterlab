@@ -299,9 +299,9 @@ class LabPathApp(JupyterApp):
     """
 
     def start(self):
-        print(f"Application directory:   {get_app_dir()}")
-        print(f"User Settings directory: {get_user_settings_dir()}")
-        print(f"Workspaces directory: {get_workspaces_dir()}")
+        self.log.info(f"Application directory:   {get_app_dir()}")
+        self.log.info(f"User Settings directory: {get_user_settings_dir()}")
+        self.log.info(f"Workspaces directory: {get_workspaces_dir()}")
 
 
 class LabWorkspaceExportApp(WorkspaceExportApp):

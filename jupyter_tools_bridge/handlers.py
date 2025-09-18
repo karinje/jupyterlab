@@ -17,8 +17,18 @@ from jupyter_server.base.handlers import APIHandler
 from jupyter_ydoc import YNotebook
 from jupyter_client import KernelManager, BlockingKernelClient
 
-# Use ServerApp logger so INFO messages show up
-# logger = logging.getLogger(__name__)
+# Set up proper logging using simplified config
+try:
+    from .logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
 
 
 class BaseToolsHandler(APIHandler):
@@ -269,8 +279,7 @@ class InsertCellHandler(BaseToolsHandler):
                 "execution_state": "idle",
                 "execution_count": None,
                 "outputs": [] if cell_type == "code" else None,
-                # nbformat expects attachments to be a mapping, not None
-                "attachments": {},
+                # Don't add attachments unless needed - causes validation errors
             }
 
             # Insert the cell using YNotebook API
@@ -730,9 +739,10 @@ class SaveNotebookHandler(BaseToolsHandler):
                     # Non-code cells should not carry outputs
                     if "outputs" in c and c["outputs"] is None:
                         del c["outputs"]
-                # attachments: ensure dict
+                # attachments: only add if not None (avoid validation errors)
                 if c.get("attachments") is None:
-                    c["attachments"] = {}
+                    # Remove attachments property entirely if None
+                    c.pop("attachments", None)
                 # id: ensure present (nbformat 4.5+)
                 if not c.get("id"):
                     c["id"] = str(uuid.uuid4())

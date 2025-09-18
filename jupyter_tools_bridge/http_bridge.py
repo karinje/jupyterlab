@@ -1,15 +1,28 @@
 """
-HTTP Bridge for JupyterAgent Tools
-Exposes JupyterAgent methods via HTTP API for LangGraph integration
+HTTP Bridge for Jupyter Tools - Alternative HTTP-based interface.
+
+This module provides an HTTP-based interface for cases where YDoc integration
+is not available or desired.
 """
 
 import json
 import logging
+from typing import Dict, Any
+import aiohttp
 from jupyter_server.base.handlers import APIHandler
-from jupyter_server.extension.application import ExtensionApp
-from .tools import JupyterAgent
 
-logger = logging.getLogger(__name__)
+# Set up proper logging using simplified config
+try:
+    from .logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
 
 
 class JupyterAgentHandler(APIHandler):

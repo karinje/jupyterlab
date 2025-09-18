@@ -1,6 +1,27 @@
+"""
+System Tools for LangGraph Agent
+
+This module creates system-level tools for the LangGraph agent including
+user communication and plan creation functionality.
+"""
+
 from typing import List
+import logging
 from langchain_core.tools import StructuredTool
 from ..schemas import RespondToUserArgs, CreatePlanArgs, PlanStepOutput
+
+# Set up proper logging using simplified config
+try:
+    from jupyter_tools_bridge.logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
 
 
 def create_system_tools(chat_handler) -> List[StructuredTool]:
@@ -14,9 +35,12 @@ def create_system_tools(chat_handler) -> List[StructuredTool]:
         try:
             if intent == "completion":
                 await chat_handler.send_status(message, "success")
-        except Exception:
-            pass
+                logger.info(f"Sent completion status: {message[:100]}...")
+        except Exception as e:
+            logger.warning(f"Failed to send status: {e}")
+        
         await chat_handler.send_message(message)
+        logger.info(f"Responded to user: intent={intent or 'none'}, message={message[:100]}...")
         return f"responded: intent={intent or 'none'}"
 
     async def create_plan(plan_steps: List[PlanStepOutput]) -> str:
@@ -25,6 +49,7 @@ def create_system_tools(chat_handler) -> List[StructuredTool]:
             for step in plan_steps
         ]
         await chat_handler.display_plan_cards(steps)
+        logger.info(f"Created plan with {len(steps)} steps")
         return f"plan_created: steps={len(steps)}"
 
     return [

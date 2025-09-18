@@ -466,6 +466,154 @@ Contents API → Persistent notebook state
 
 ---
 
+## 📝 **Logging System - Comprehensive Setup**
+
+### **🎯 Overview**
+We've implemented a sophisticated two-level logging system that provides detailed debugging for our components while keeping JupyterLab's core logging quiet.
+
+### **✅ Key Features**
+- **Selective logging levels**: DEBUG for our components, WARNING for JupyterLab core
+- **Beautiful format**: `[timestamp] [folder/file.py:line] LEVEL: message`
+- **Pattern-based filtering**: Scalable approach using logger name patterns
+- **Single logger architecture**: Simplified configuration and maintenance
+- **Configurable via config file**: Easy to adjust logging levels
+
+### **🎯 Logging Levels**
+
+#### **Our Components (DEBUG Level)**
+- **Chat**: `packages/chat/jupyterlab_chat/__init__.py`, `packages/chat/python/openai_agents_bridge.py`
+- **Agent**: All files in `packages/jupyter-agent/jupyter_agent_lg/`
+- **Tools Bridge**: All files in `jupyter_tools_bridge/`
+- **Pattern matching**: `jupyterlab`, `packages.chat.`, `packages.jupyter-agent.`, `jupyter_tools_bridge`, `jupyter_agent_lg`
+
+#### **JupyterLab Core (WARNING Level)**
+- **HTTP clients**: `_client.py`, `httpx`, `aiohttp`, `requests`
+- **Core systems**: `tornado`, `jupyter_server`, `jupyter_client`, `traitlets`
+- **Everything else**: Any logger not matching our component patterns
+
+### **📁 Configuration Files**
+
+#### **1. Centralized Logging Config**
+**File**: `jupyter_tools_bridge/logging_config.py`
+```python
+# Set up proper logging using simplified config
+try:
+    from jupyter_tools_bridge.logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
+```
+
+#### **2. JupyterLab Server Config**
+**File**: `jupyter_server_config.py`
+```python
+# Set logging levels separately for JupyterLab vs our components
+# JupyterLab core logging level (to reduce noise)
+JUPYTERLAB_LOG_LEVEL = "WARNING"  # WARNING, ERROR
+
+# Our components logging level (for detailed debugging)  
+JUPYTERLAB_COMPONENTS_LOG_LEVEL = "DEBUG"  # DEBUG, INFO, WARNING, ERROR
+
+# Set environment variables for our logging config to read
+os.environ["JUPYTERLAB_LOG_LEVEL"] = JUPYTERLAB_LOG_LEVEL
+os.environ["JUPYTERLAB_COMPONENTS_LOG_LEVEL"] = JUPYTERLAB_COMPONENTS_LOG_LEVEL
+```
+
+### **🎯 Example Output**
+```
+[2025-09-17 20:47:27] [packages/chat/jupyterlab_chat/__init__.py:553] INFO: 🚨🚨🚨 CHAT HANDLER CALLED
+[2025-09-17 20:47:27] [packages/jupyter-agent/jupyter_agent_lg/agent.py:542] INFO: 🚀 Processing request
+[2025-09-17 20:47:29] [jupyter_tools_bridge/tools.py:380] INFO: Insert and execute: Untitled1.ipynb
+[2025-09-17 20:47:29] [packages/jupyter-agent/jupyter_agent_lg/tools/jupyter_tools.py:48] INFO: 🔧 TOOL CALLED
+[2025-09-17 20:47:33] [packages/jupyter-agent/jupyter_agent_lg/agent.py:600] INFO: 🏁 Workflow completed
+```
+
+### **🔧 Usage in Components**
+All component files use this consistent pattern:
+```python
+# Set up proper logging using simplified config
+try:
+    from jupyter_tools_bridge.logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
+
+# Then use normally
+logger.info("Your message here")
+logger.debug("Detailed debugging info")
+logger.warning("Something concerning")
+logger.error("An error occurred")
+```
+
+### **📋 Files Updated with Logging**
+
+#### **Chat Components**
+- ✅ `packages/chat/jupyterlab_chat/__init__.py` - All print statements → logger calls
+- ✅ `packages/chat/python/openai_agents_bridge.py` - All print statements → logger calls
+
+#### **Jupyter Agent Components**
+- ✅ `packages/jupyter-agent/jupyter_agent_lg/agent.py` - All print statements → logger calls
+- ✅ `packages/jupyter-agent/jupyter_agent_lg/handlers.py` - Updated logging setup
+- ✅ `packages/jupyter-agent/jupyter_agent_lg/tools/jupyter_tools.py` - All print statements → logger calls
+- ✅ `packages/jupyter-agent/jupyter_agent_lg/tools/mcp_tools.py` - Updated logging setup
+- ✅ `packages/jupyter-agent/jupyter_agent_lg/tools/system_tools.py` - Added logging
+- ✅ `packages/jupyter-agent/jupyter_agent_lg/context.py` - Updated logging setup
+- ✅ `packages/jupyter-agent/jupyter_agent_lg/llm.py` - Updated logging setup
+- ✅ `packages/jupyter-agent/jupyter_agent_lg/state.py` - Added logging setup
+- ✅ `packages/jupyter-agent/jupyter_agent_lg/test_agent.py` - All print statements → logger calls
+
+#### **Jupyter Tools Bridge**
+- ✅ `jupyter_tools_bridge/tools.py` - All print statements → logger calls
+- ✅ `jupyter_tools_bridge/handlers.py` - Updated logging setup
+- ✅ `jupyter_tools_bridge/http_bridge.py` - Updated logging setup
+- ✅ `jupyter_tools_bridge/logging_config.py` - **NEW** - Centralized logging configuration
+
+#### **JupyterLab Core**
+- ✅ `jupyterlab/labapp.py` - Print statements → self.log calls
+- ✅ `jupyter_server_config.py` - Added logging level configuration
+
+### **🧪 Testing**
+**Test Script**: `test_scripts/test_actual_logging_output.py`
+```bash
+python test_scripts/test_actual_logging_output.py
+```
+
+Shows logging from different components with proper folder/file/line identification.
+
+### **🚀 Starting JupyterLab with Logging**
+```bash
+# Start with optimized logging (our components DEBUG, JupyterLab WARNING)
+jupyter lab --dev-mode --extensions-in-dev-mode --ServerApp.log_level=INFO --port=8890 --config=jupyter_server_config.py > jlab.log 2>&1
+
+# Check our component logs
+grep -E "packages/.*INFO|jupyter_tools_bridge.*INFO" jlab.log
+
+# Check for errors
+grep -E "ERROR:|Failed" jlab.log
+```
+
+### **💡 Benefits Achieved**
+- ✅ **No print statements**: All replaced with proper logger calls
+- ✅ **Detailed debugging**: Our components show full DEBUG info
+- ✅ **Clean logs**: JupyterLab noise reduced to WARNING+ only
+- ✅ **Easy identification**: Exact file and line for every log message
+- ✅ **Scalable**: Pattern-based filtering works with any new components
+- ✅ **Configurable**: Easy to change log levels in config file
+
+---
+
 ## 📊 **Project Status Matrix**
 
 | Component | Status | Functionality | Integration |

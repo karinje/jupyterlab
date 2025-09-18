@@ -16,12 +16,21 @@ from collections import defaultdict
 # Import our JupyterAgent tools
 from jupyter_tools_bridge.tools import JupyterTools
 
-# Set up logger first
-logger = logging.getLogger(__name__)
+# Set up proper logging using simplified config
+try:
+    from jupyter_tools_bridge.logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
 
 # Module-level debug to confirm our code is loaded
 logger.info("🔥🔥🔥 JUPYTERLAB CHAT MODULE IMPORTED - NEW VERSION! 🔥🔥🔥")
-print("[chat-backend] module import: JUPYTERLAB CHAT MODULE IMPORTED - NEW VERSION!")
 
 class ChatBroadcaster:
     """Simple in-process broadcaster keyed by notebook_path."""
@@ -60,7 +69,7 @@ class ChatBroadcaster:
                     now = _time.time() * 1000.0
                     last = self._recent_messages.get(key, 0)
                     if now - last < 2000:
-                        print(f"[WS] dedup drop MESSAGE path={notebook_path}")
+                        logger.debug(f"WS dedup drop MESSAGE path={notebook_path}")
                         return
                     self._recent_messages[key] = now
                 except Exception:
@@ -76,9 +85,6 @@ class ChatBroadcaster:
             try:
                 logger.info(
                     f"WS broadcast type={etype} notebook_path={notebook_path} recipients={len(targets)}"
-                )
-                print(
-                    f"[WS] broadcast type={etype} recipients={len(targets)} path={notebook_path}"
                 )
             except Exception:
                 pass
@@ -414,7 +420,7 @@ class ChatStatusHandler(APIHandler):
                                 targets = list(chat_broadcaster._subscribers.get(key, set()))
                             else:
                                 targets = list(chat_broadcaster._subscribers.get("*", set()))
-                            print(f"[WS] about to broadcast STATUS to recipients={len(targets)} path={key}")
+                            logger.debug(f"WS about to broadcast STATUS to recipients={len(targets)} path={key}")
                             chat_broadcaster.broadcast(
                                 {
                                     "type": item.get("type") or "status",
@@ -501,7 +507,7 @@ class ChatMessageHandler(APIHandler):
                                 targets = list(chat_broadcaster._subscribers.get(key, set()))
                             else:
                                 targets = list(chat_broadcaster._subscribers.get("*", set()))
-                            print(f"[WS] about to broadcast MESSAGE to recipients={len(targets)} path={key}")
+                            logger.debug(f"WS about to broadcast MESSAGE to recipients={len(targets)} path={key}")
                             chat_broadcaster.broadcast(
                                 {
                                     "type": "message",
@@ -544,32 +550,27 @@ class ChatOpenAIHandler(APIHandler):
 
     async def post(self):
         """Handle POST requests to /api/chat/openai"""
-        self.log.info(
-            "🚨🚨🚨 CHAT HANDLER CALLED - VERSION 4 - TESTING PYTHON RELOAD! 🚨🚨🚨"
-        )
-        print("[chat-backend] ChatOpenAIHandler.post: entered")
-        self.log.info("🔍 IMMEDIATE NEXT LINE AFTER CHAT HANDLER CALLED")
-        self.log.info("🔍 ENTERING POST METHOD")
+        logger.info("🚨🚨🚨 CHAT HANDLER CALLED - VERSION 4 - TESTING PYTHON RELOAD! 🚨🚨🚨")
+        logger.info("🔍 IMMEDIATE NEXT LINE AFTER CHAT HANDLER CALLED")
+        logger.info("🔍 ENTERING POST METHOD")
         request_start = time.time()
-        self.log.info(f"🚀 Request started at {request_start}")
-        self.log.info("🔍 ABOUT TO ENTER TRY BLOCK")
+        logger.info(f"🚀 Request started at {request_start}")
+        logger.info("🔍 ABOUT TO ENTER TRY BLOCK")
 
         try:
             # Parse request body
             parse_start = time.time()
-            self.log.info(f"🔍 RAW REQUEST BODY: {self.request.body}")
-            print(
-                f"[chat-backend] raw body bytes: {len(self.request.body) if self.request.body else 0}"
-            )
+            logger.debug(f"RAW REQUEST BODY: {self.request.body}")
+            logger.debug(f"Raw body bytes: {len(self.request.body) if self.request.body else 0}")
             body = json.loads(self.request.body)
-            self.log.info("🔍 PARSED BODY SUCCESS")
+            logger.debug("PARSED BODY SUCCESS")
             message = body.get("message", "")
             model = body.get("model", "gpt-4o-mini")
             provider = body.get("provider", "openai")
             mcp_servers_config = body.get("mcpServers", {})
             context = body.get("context", {})
             notebook_path = context.get("notebook_path", "Untitled.ipynb")
-            print(f"[chat-backend] notebook_path (from context): {notebook_path}")
+            logger.info(f"notebook_path (from context): {notebook_path}")
             thread_id = body.get("thread_id")
 
             # SERVER-SIDE FALLBACK: derive path from active sessions if needed
@@ -591,26 +592,17 @@ class ChatOpenAIHandler(APIHandler):
                                     notebook_path = sessions[0].get(
                                         "path", notebook_path
                                     )
-                                    self.log.info(
-                                        f"🧭 Fallback notebook_path from sessions: {notebook_path}"
-                                    )
-                                    print(
-                                        f"[chat-backend] notebook_path (fallback from sessions): {notebook_path}"
-                                    )
+                                    logger.info(f"🧭 Fallback notebook_path from sessions: {notebook_path}")
                                 else:
-                                    self.log.info(
-                                        f"🧭 Fallback skipped; session count={len(sessions)}"
-                                    )
+                                    logger.info(f"🧭 Fallback skipped; session count={len(sessions)}")
                 except Exception as e:
-                    self.log.warning(f"Fallback to sessions failed: {e}")
+                    logger.warning(f"Fallback to sessions failed: {e}")
 
             # Cold start clearing: on the first request after server restart, clear chat history
             global BOOT_CLEAR_DONE
             if not BOOT_CLEAR_DONE and notebook_path:
                 try:
-                    self.log.warning(
-                        f"❄️ Cold start: clearing chat_conversations for {notebook_path}"
-                    )
+                    logger.warning(f"❄️ Cold start: clearing chat_conversations for {notebook_path}")
                     # Prime XSRF by loading once, then save empty conversations
                     await self.conversation_manager.load_conversation_history(
                         notebook_path
@@ -621,17 +613,15 @@ class ChatOpenAIHandler(APIHandler):
                     )
                     BOOT_CLEAR_DONE = True
                 except Exception as e:
-                    self.log.warning(f"Cold start clear failed: {e}")
+                    logger.warning(f"Cold start clear failed: {e}")
 
             # Continue as before
             chat_mode = body.get("chat_mode", "auto")  # auto, langgraph, openai_agents
             parse_time = time.time() - parse_start
-            self.log.info(f"⚡ Request parsing took {parse_time:.3f}s")
-            self.log.info(
-                f"🎯 USING MODEL: {model}, PROVIDER: {provider}, MODE: {chat_mode}"
-            )
-            self.log.info(f"🔍 FULL REQUEST BODY: {json.dumps(body, indent=2)}")
-            print(f"[chat-backend] proceeding with notebook_path: {notebook_path}")
+            logger.info(f"⚡ Request parsing took {parse_time:.3f}s")
+            logger.info(f"🎯 USING MODEL: {model}, PROVIDER: {provider}, MODE: {chat_mode}")
+            logger.debug(f"FULL REQUEST BODY: {json.dumps(body, indent=2)}")
+            logger.info(f"proceeding with notebook_path: {notebook_path}")
 
             # Load conversation history
             history_start = time.time()
@@ -652,9 +642,7 @@ class ChatOpenAIHandler(APIHandler):
                     )
                     conversation_context = thread_messages[-10:]
             else:
-                self.log.warning(
-                    "❄️ Cold start: skipping history load; starting with empty conversation_context"
-                )
+                logger.warning("❄️ Cold start: skipping history load; starting with empty conversation_context")
                 BOOT_CLEAR_DONE = True
 
             history_time = time.time() - history_start
@@ -674,12 +662,10 @@ class ChatOpenAIHandler(APIHandler):
             logger.info(f"⚡ User message saving took {save_user_time:.3f}s")
 
             # ALWAYS USE LANGGRAPH AGENT - NO FALLBACKS!
-            self.log.info("🤖 ALWAYS USING LANGGRAPH AGENT")
+            logger.info("🤖 ALWAYS USING LANGGRAPH AGENT")
             # Force empty conversation_context for now to avoid stale history
             if conversation_context:
-                self.log.warning(
-                    f"❄️ Forcing empty conversation_context (dropping {len(conversation_context)} messages)"
-                )
+                logger.warning(f"❄️ Forcing empty conversation_context (dropping {len(conversation_context)} messages)")
             response = await self._run_langgraph_agent(
                 message,
                 notebook_path,
@@ -927,54 +913,54 @@ class ChatOpenAIHandler(APIHandler):
     ) -> str:
         """Run LangGraph agent workflow"""
         try:
-            self.log.info("🚀 STEP 1: CALLING LANGGRAPH AGENT")
+            logger.info("🚀 STEP 1: CALLING LANGGRAPH AGENT")
 
             # Add the jupyter-agent package to Python path for dev mode
-            self.log.info("🚀 STEP 2: IMPORTING MODULES")
+            logger.info("🚀 STEP 2: IMPORTING MODULES")
             import sys
             import os
             import asyncio
 
-            self.log.info("🚀 STEP 3: SETTING UP PYTHON PATH")
+            logger.info("🚀 STEP 3: SETTING UP PYTHON PATH")
             # Get the absolute path to the jupyter-agent package
             current_dir = os.path.dirname(os.path.abspath(__file__))
             jupyter_agent_path = os.path.join(current_dir, "..", "..", "jupyter-agent")
             jupyter_agent_path = os.path.abspath(jupyter_agent_path)
-            self.log.info(f"🐍 Jupyter agent path: {jupyter_agent_path}")
+            logger.info(f"🐍 Jupyter agent path: {jupyter_agent_path}")
 
             if jupyter_agent_path not in sys.path:
                 sys.path.insert(0, jupyter_agent_path)
-                self.log.info("🐍 Added LangGraph agent path to sys.path")
+                logger.info("🐍 Added LangGraph agent path to sys.path")
             else:
-                self.log.info("🐍 Path already in sys.path")
+                logger.info("🐍 Path already in sys.path")
 
-            self.log.info("🚀 STEP 4: IMPORTING LANGGRAPH AGENT")
+            logger.info("🚀 STEP 4: IMPORTING LANGGRAPH AGENT")
             # Import LangGraph agent
             from jupyter_agent_lg.agent import DataAnalysisAgent
 
-            self.log.info("✅ DataAnalysisAgent imported successfully")
+            logger.info("✅ DataAnalysisAgent imported successfully")
 
-            self.log.info("🚀 STEP 5: GETTING SERVER CONFIG")
+            logger.info("🚀 STEP 5: GETTING SERVER CONFIG")
             # Get server configuration
             server_url = f"http://127.0.0.1:{self.serverapp.port}"
-            self.log.info(f"🌐 Server URL: {server_url}")
+            logger.info(f"🌐 Server URL: {server_url}")
 
-            self.log.info("🚀 STEP 6: GETTING SERVER TOKEN")
+            logger.info("🚀 STEP 6: GETTING SERVER TOKEN")
             token = self._get_server_token()
-            self.log.info(f"🔑 Token length: {len(token) if token else 0}")
+            logger.info(f"🔑 Token length: {len(token) if token else 0}")
 
-            self.log.info("🚀 STEP 7: GETTING API KEYS")
+            logger.info("🚀 STEP 7: GETTING API KEYS")
             # Get API keys
             openai_api_key = self._get_openai_api_key()
             anthropic_api_key = self._get_anthropic_api_key()
-            self.log.info(
+            logger.info(
                 f"🔑 OpenAI key length: {len(openai_api_key) if openai_api_key else 0}"
             )
-            self.log.info(
+            logger.info(
                 f"🔑 Anthropic key length: {len(anthropic_api_key) if anthropic_api_key else 0}"
             )
 
-            self.log.info("🚀 STEP 8: CREATING AGENT")
+            logger.info("🚀 STEP 8: CREATING AGENT")
             # Create agent
             agent = DataAnalysisAgent(
                 server_url=server_url,
@@ -982,14 +968,14 @@ class ChatOpenAIHandler(APIHandler):
                 openai_api_key=openai_api_key,
                 anthropic_api_key=anthropic_api_key,
             )
-            self.log.info("✅ DataAnalysisAgent created successfully")
+            logger.info("✅ DataAnalysisAgent created successfully")
 
-            self.log.info("🚀 STEP 9: PROCESSING REQUEST")
-            self.log.info(f"📝 Message: '{message}'")
-            self.log.info(f"📝 Model: {model}")
-            self.log.info(f"📝 Provider: {provider}")
-            self.log.info(f"📝 Notebook path: {notebook_path}")
-            self.log.info(
+            logger.info("🚀 STEP 9: PROCESSING REQUEST")
+            logger.info(f"📝 Message: '{message}'")
+            logger.info(f"📝 Model: {model}")
+            logger.info(f"📝 Provider: {provider}")
+            logger.info(f"📝 Notebook path: {notebook_path}")
+            logger.info(
                 f"📝 Conversation context length: {len(conversation_context)}"
             )
 
@@ -1005,10 +991,10 @@ class ChatOpenAIHandler(APIHandler):
                 ),
                 timeout=300.0,  # 5 minute timeout
             )
-            self.log.info(f"✅ LANGGRAPH AGENT RETURNED: {result[:200]}...")
-            self.log.info("🚀 STEP 10: AGENT PROCESS REQUEST COMPLETED")
-            self.log.info(f"✅ RESULT TYPE: {type(result)}")
-            self.log.info(f"✅ RESULT LENGTH: {len(str(result))}")
+            logger.info(f"✅ LANGGRAPH AGENT RETURNED: {result[:200]}...")
+            logger.info("🚀 STEP 10: AGENT PROCESS REQUEST COMPLETED")
+            logger.info(f"✅ RESULT TYPE: {type(result)}")
+            logger.info(f"✅ RESULT LENGTH: {len(str(result))}")
 
             return result
 
@@ -1016,8 +1002,8 @@ class ChatOpenAIHandler(APIHandler):
             import traceback
 
             full_traceback = traceback.format_exc()
-            self.log.error(f"❌ LangGraph agent execution failed: {e}")
-            self.log.error(f"❌ FULL TRACEBACK:\n{full_traceback}")
+            logger.error(f"❌ LangGraph agent execution failed: {e}")
+            logger.error(f"❌ FULL TRACEBACK:\n{full_traceback}")
             return f"LangGraph agent error: {e}"
 
     def _get_openai_api_key(self) -> str:
@@ -1102,4 +1088,4 @@ def _load_jupyter_server_extension(server_app):
     ]
     server_app.web_app.add_handlers(".*$", handlers)
     server_app.log.info("JupyterLab Chat extension loaded with status endpoints")
-    print("[chat-backend] extension loaded: handlers registered /api/chat/*")
+    logger.info("extension loaded: handlers registered /api/chat/*")

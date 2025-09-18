@@ -11,9 +11,23 @@ will decide when to use MCP tools.
 
 import asyncio
 import json
+import logging
 import os
 import sys
 from typing import Any, Dict
+
+# Set up proper logging using simplified config
+try:
+    from jupyter_tools_bridge.logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
 
 
 async def send_message_with_mcp(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -50,9 +64,9 @@ async def send_message_with_mcp(data: Dict[str, Any]) -> Dict[str, Any]:
                     server = MCPServerStdio(command=command, args=args, env={**os.environ, **env})
                     await server.connect()
                     mcp_server_instances.append(server)
-                    print(f"✅ Connected to MCP server: {server_name}", file=sys.stderr)
+                    logger.info(f"✅ Connected to MCP server: {server_name}")
                 except Exception as e:
-                    print(f"❌ Failed to connect to MCP server {server_name}: {e}", file=sys.stderr)
+                    logger.error(f"❌ Failed to connect to MCP server {server_name}: {e}")
 
         try:
             # Create agent with MCP servers (empty list if none configured)
@@ -79,7 +93,7 @@ async def send_message_with_mcp(data: Dict[str, Any]) -> Dict[str, Any]:
                 try:
                     server.close()
                 except Exception as e:
-                    print(f"Error closing MCP server: {e}", file=sys.stderr)
+                    logger.error(f"Error closing MCP server: {e}")
 
     except ImportError as e:
         return {

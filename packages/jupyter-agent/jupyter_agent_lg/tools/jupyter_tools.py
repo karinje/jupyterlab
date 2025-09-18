@@ -1,18 +1,35 @@
 """
-Jupyter notebook manipulation tools for the LangGraph agent
+Jupyter Tools for LangGraph Agent
+
+This module creates structured tools for the LangGraph agent to interact
+with Jupyter notebooks via the JupyterTools bridge.
 """
 
-import logging
+from langchain.tools import StructuredTool
 from typing import List, Dict
-from langchain_core.tools import StructuredTool
+import logging
+
+# Set up proper logging using simplified config
+try:
+    from jupyter_tools_bridge.logging_config import get_logger
+    logger = get_logger()
+    tool_logger = get_logger()  # Same logger for tools
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
+    tool_logger = logging.getLogger("jupyterlab")
+
 from ..schemas import (
     InsertCellArgs,
     DeleteCellArgs,
     # GetNotebookCellsArgs - removed, tool disabled
     # ExecuteCodeArgs - removed, tool no longer exists
 )
-
-logger = logging.getLogger(__name__)
 
 
 def create_jupyter_tools(
@@ -28,7 +45,7 @@ def create_jupyter_tools(
     ) -> str:
         """Insert and execute a cell in the notebook"""
         try:
-            print(
+            tool_logger.info(
                 f"🔧 TOOL CALLED: insert_and_execute_cell with code: {str(code)[:50]}..."
             )
             code_preview = (

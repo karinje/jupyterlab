@@ -18,8 +18,18 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from .state import Decision
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+# Set up proper logging using simplified config
+try:
+    from jupyter_tools_bridge.logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
 
 
 class LLMProvider(ABC):

@@ -1,20 +1,33 @@
 #!/usr/bin/env python3
 
 """
-JupyterLab Notebook Tools - High-level tools to interact with notebooks
+Jupyter Tools - Real-time notebook manipulation via YDoc.
 
-This module provides the JupyterTools class with tools designed for programmatic
-notebook manipulation - insert code, execute it, and capture outputs in Jupyter notebooks via real-time YDoc updates.
+This module provides tools for manipulating Jupyter notebooks in real-time
+by directly modifying the live YNotebook shared model. Changes appear
+instantly in the browser via JupyterLab's Real-Time Collaboration (RTC) system.
 """
 
+import aiohttp
 import asyncio
+import json
 import logging
 import uuid
-import aiohttp
-from typing import Dict, Union, Any, Optional
+from typing import Dict, Any, Optional, List, Union
+from urllib.parse import urljoin
 
-# Initialize logger at module level
-logger = logging.getLogger(__name__)
+# Set up proper logging using simplified config
+try:
+    from .logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
 
 
 class JupyterTools:
@@ -68,43 +81,33 @@ class JupyterTools:
         """Ensure we have the _xsrf cookie and header value by visiting /lab once."""
         await self._ensure_session()
         if self._xsrf_token:
-            logger.info(f"Using cached XSRF token: {self._xsrf_token[:10]}...")
-            print(f"[tools] Using cached XSRF token: {self._xsrf_token[:10]}...")
+            logger.debug(f"Using cached XSRF token: {self._xsrf_token[:10]}...")
             return
         try:
-            logger.info("Fetching XSRF token from /lab")
-            print("[tools] Fetching XSRF token from /lab")
+            logger.debug("Fetching XSRF token from /lab")
             url = f"{self.base_url}/lab"
             async with self.session.get(url, headers=self._get_headers()) as resp:
-                logger.info(f"GET /lab response status: {resp.status}")
-                print(f"[tools] GET /lab response status: {resp.status}")
-                logger.info(f"Response cookies: {dict(resp.cookies)}")
-                print(f"[tools] Response cookies: {dict(resp.cookies)}")
+                logger.debug(f"GET /lab response status: {resp.status}")
+                logger.debug(f"Response cookies: {dict(resp.cookies)}")
                 # Try to read cookie from response
                 xsrf_cookie = resp.cookies.get("_xsrf")
-                logger.info(f"_xsrf cookie object: {xsrf_cookie}")
-                print(f"[tools] _xsrf cookie object: {xsrf_cookie}")
+                logger.debug(f"_xsrf cookie object: {xsrf_cookie}")
                 if xsrf_cookie and xsrf_cookie.value:
                     self._xsrf_token = xsrf_cookie.value
                     logger.info(f"✅ Obtained XSRF token: {self._xsrf_token[:10]}...")
-                    print(f"[tools] ✅ Obtained XSRF token: {self._xsrf_token[:10]}...")
                 else:
-                    logger.warning("No _xsrf cookie found in response")
-                    print("[tools] No _xsrf cookie found in response")
+                    logger.debug("No _xsrf cookie found in response")
                     # Fallback: try cookie jar
                     # Try to extract from cookie jar
                     for cookie in self.session.cookie_jar:
                         if cookie.key == "_xsrf":
                             self._xsrf_token = cookie.value
                             logger.info(f"✅ Found XSRF token in cookie jar: {self._xsrf_token[:10]}...")
-                            print(f"[tools] ✅ Found XSRF token in cookie jar: {self._xsrf_token[:10]}...")
                             break
                     else:
                         logger.warning("❌ No XSRF token found anywhere")
-                        print("[tools] ❌ No XSRF token found anywhere")
         except Exception as e:
             logger.error(f"❌ Failed to obtain XSRF token: {e}")
-            print(f"[tools] ❌ Failed to obtain XSRF token: {e}")
 
     async def insert_cell(
         self,
@@ -147,22 +150,20 @@ class JupyterTools:
         )
 
         headers = self._get_headers(xsrf=self._xsrf_token)
-        print(f"[tools] POST headers: {headers}")
-        print(f"[tools] POST data: {data}")
+        logger.debug(f"POST headers: {headers}")
+        logger.debug(f"POST data: {data}")
 
         # Ensure _xsrf cookie is sent along with header
         cookies = {'_xsrf': self._xsrf_token} if self._xsrf_token else {}
-        print(f"[tools] POST cookies: {cookies}")
+        logger.debug(f"POST cookies: {cookies}")
 
         async with self.session.post(
             url, json=data, headers=headers, cookies=cookies
         ) as response:
             logger.info(f"POST response status: {response.status}")
-            print(f"[tools] POST response status: {response.status}")
             if response.status != 200:
                 error_text = await response.text()
                 logger.error(f"POST failed with {response.status}: {error_text}")
-                print(f"[tools] POST failed with {response.status}: {error_text}")
                 raise Exception(f"Failed to insert cell: {error_text}")
 
             result = await response.json()
@@ -205,15 +206,15 @@ class JupyterTools:
 
         # Ensure _xsrf cookie is sent along with header
         cookies = {'_xsrf': self._xsrf_token} if self._xsrf_token else {}
-        print(f"[tools] EXECUTE POST cookies: {cookies}")
+        logger.debug(f"EXECUTE POST cookies: {cookies}")
 
         async with self.session.post(
             url, json=data, headers=self._get_headers(xsrf=self._xsrf_token), cookies=cookies
         ) as response:
-            print(f"[tools] EXECUTE POST response status: {response.status}")
+            logger.info(f"EXECUTE POST response status: {response.status}")
             if response.status != 200:
                 error_text = await response.text()
-                print(f"[tools] EXECUTE POST failed with {response.status}: {error_text}")
+                logger.error(f"EXECUTE POST failed with {response.status}: {error_text}")
                 raise Exception(f"Failed to execute cell: {error_text}")
 
             result = await response.json()
@@ -462,7 +463,7 @@ async def test_jupyter_tools():
             markdown="# Test Tools\nThis is a test of the YDoc-based tools.",
             cell_index="append",
         )
-        print(f"Inserted markdown cell: {result}")
+        logger.info(f"Inserted markdown cell: {result}")
 
         # Test 2: Insert and execute code
         result = await tools.insert_code_and_execute(
@@ -470,7 +471,7 @@ async def test_jupyter_tools():
             code="print('Hello from JupyterTools!')\nimport numpy as np\nnp.random.rand(3, 3)",
             cell_index="append",
         )
-        print(f"Executed code cell: {result}")
+        logger.info(f"Executed code cell: {result}")
 
 
 if __name__ == "__main__":

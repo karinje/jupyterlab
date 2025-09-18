@@ -20,8 +20,18 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from pydantic import create_model, Field, BaseModel
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+# Set up proper logging using simplified config
+try:
+    from jupyter_tools_bridge.logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
 
 
 class ChatHandler:
@@ -529,8 +539,7 @@ class DataAnalysisAgent:
     ) -> str:
         """Process a user request through the LangGraph workflow"""
         try:
-            print(f"🔥 AGENT PROCESS_REQUEST CALLED: {request[:50]}...")
-            logger.info(f"🚀 Processing request: {request[:100]}...")
+            logger.info(f"�� Processing request: {request[:100]}...")
 
             # Update tools if notebook path changed
             if notebook_path != self.default_notebook_path:
@@ -584,18 +593,12 @@ class DataAnalysisAgent:
             )
 
             # Run the workflow
-            print(
-                f"🔥 ABOUT TO CALL WORKFLOW with state keys: {list(initial_state.keys())}"
-            )
             logger.info(
                 f"🚀 About to call workflow.ainvoke with state keys: {list(initial_state.keys())}"
             )
             final_state = await self.workflow.ainvoke(initial_state)
-            print(
-                f"🔥 WORKFLOW COMPLETED with final state keys: {list(final_state.keys())}"
-            )
             logger.info(
-                f"🏁 Workflow completed with final state keys: {list(final_state.keys())}"
+                f"�� Workflow completed with final state keys: {list(final_state.keys())}"
             )
 
             # Extract result to return
@@ -605,7 +608,6 @@ class DataAnalysisAgent:
             return result
 
         except Exception as e:
-            print(f"🔥 AGENT EXCEPTION: {e}")
             logger.error(f"❌ Error processing request: {e}")
             await self.chat_handler.send_status(f"❌ Error: {e}", "error")
             return f"Error processing request: {e}"
@@ -613,7 +615,6 @@ class DataAnalysisAgent:
     async def analyze_and_decide(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Core decision node - LLM analyzes context and decides next action via tool calls"""
         try:
-            print(f"🔥 ANALYZE_AND_DECIDE CALLED with state keys: {list(state.keys())}")
             logger.info("🧠 [analyze_and_decide] start")
 
             # Update iteration counter for safety

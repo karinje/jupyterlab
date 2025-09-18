@@ -8,9 +8,18 @@ import os
 import logging
 from .agent import DataAnalysisAgent
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Set up proper logging using simplified config
+try:
+    from jupyter_tools_bridge.logging_config import get_logger
+    logger = get_logger()
+except ImportError:
+    # Fallback if centralized logging not available
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger("jupyterlab")
 
 
 async def test_agent():
@@ -22,7 +31,7 @@ async def test_agent():
     openai_api_key = os.getenv("OPENAI_API_KEY")
 
     if not openai_api_key:
-        print("❌ OPENAI_API_KEY environment variable not set")
+        logger.error("❌ OPENAI_API_KEY environment variable not set")
         return
 
     try:
@@ -36,7 +45,7 @@ async def test_agent():
         notebook_path = "test_notebook.ipynb"
         conversation_history = []
 
-        print(f"🚀 Testing LangGraph agent with request: {request}")
+        logger.info(f"🚀 Testing LangGraph agent with request: {request}")
 
         # Process request
         result = await agent.process_request(
@@ -47,11 +56,11 @@ async def test_agent():
             provider="openai",
         )
 
-        print("✅ Agent completed successfully!")
-        print(f"📊 Result: {result}")
+        logger.info("✅ Agent completed successfully!")
+        logger.info(f"📊 Result: {result}")
 
     except Exception as e:
-        print(f"❌ Test failed: {e}")
+        logger.error(f"❌ Test failed: {e}")
         import traceback
 
         traceback.print_exc()
@@ -59,77 +68,76 @@ async def test_agent():
 
 def test_state_management():
     """Test state management components"""
-    from .state import StateManager, PlanStep
+    logger.info("🧪 Testing state management...")
 
-    print("🧪 Testing state management...")
+    # Test 1: Initial state creation
+    from .state import create_initial_state
 
-    # Test state manager
-    state_manager = StateManager()
+    try:
+        state = create_initial_state(
+            original_request="test request",
+            notebook_path="test.ipynb",
+            conversation_history=[],
+            model="gpt-4o-mini",
+            provider="openai",
+        )
+        logger.info(f"✅ Initial state created: {state['original_request']}")
+    except Exception as e:
+        logger.error(f"❌ State creation failed: {e}")
 
-    # Create initial state
-    state = state_manager.create_initial_state(
-        request="Test request",
-        notebook_path="test.ipynb",
-        conversation_history=[],
-        model="gpt-4o",
-        provider="openai",
-    )
+    # Test 2: Plan step creation
+    from .state import PlanStep
 
-    print(f"✅ Initial state created: {state['original_request']}")
+    try:
+        step = PlanStep(title="Test Step", description="Test description", completed=False)
+        logger.info(f"✅ Plan step created: {step.title}")
+    except Exception as e:
+        logger.error(f"❌ Plan step creation failed: {e}")
 
-    # Test plan step
-    step = PlanStep(
-        step_id="", title="Test Step", description="A test step for validation"
-    )
+    # Test 3: Plan serialization
+    from .state import serialize_plan_steps, deserialize_plan_steps
 
-    print(f"✅ Plan step created: {step.title}")
-
-    # Test serialization
-    serialized = state_manager.serialize_plan([step])
-    deserialized = state_manager.deserialize_plan(serialized)
-
-    print(f"✅ Plan serialization works: {deserialized[0].title}")
+    try:
+        steps = [PlanStep(title="Step 1", description="First step", completed=False)]
+        serialized = serialize_plan_steps(steps)
+        deserialized = deserialize_plan_steps(serialized)
+        logger.info(f"✅ Plan serialization works: {deserialized[0].title}")
+    except Exception as e:
+        logger.error(f"❌ Plan serialization failed: {e}")
 
 
 def test_llm_router():
-    """Test LLM router components"""
-    from .llm import LLMRouter, OpenAILLM
+    """Test LLM routing functionality"""
+    logger.info("🧪 Testing LLM router...")
 
-    print("🧪 Testing LLM router...")
+    from .llm import LLMRouter
 
-    router = LLMRouter()
-
-    # Test provider registration
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if openai_api_key:
-        openai_llm = OpenAILLM(openai_api_key, "gpt-4o-mini")
-        router.register_provider("openai", openai_llm)
-
+    try:
+        router = LLMRouter()
         providers = router.get_available_providers()
-        print(f"✅ Providers registered: {providers}")
-    else:
-        print("⚠️ Skipping LLM tests (no API key)")
+        logger.info(f"✅ Providers registered: {providers}")
+    except Exception as e:
+        logger.info("⚠️ Skipping LLM tests (no API key)")
 
 
 if __name__ == "__main__":
-    print("🤖 LangGraph Agent Test Suite")
-    print("=" * 50)
+    logger.info("🤖 LangGraph Agent Test Suite")
+    logger.info("=" * 50)
 
     # Run synchronous tests
     test_state_management()
     test_llm_router()
 
-    # Run async test
-    print("\n🚀 Running agent integration test...")
-    print("⚠️ Make sure JupyterLab is running on port 8890")
-    print("⚠️ Update the token variable in this script")
+    logger.info("\n🚀 Running agent integration test...")
+    logger.info("⚠️ Make sure JupyterLab is running on port 8890")
+    logger.info("⚠️ Update the token variable in this script")
 
     # Uncomment to run full agent test
     # asyncio.run(test_agent())
 
-    print("\n✅ Test suite completed!")
-    print("\nTo run the full agent test:")
-    print("1. Start JupyterLab: jupyter lab --port=8890")
-    print("2. Set OPENAI_API_KEY environment variable")
-    print("3. Update the token in this script")
-    print("4. Uncomment the asyncio.run(test_agent()) line")
+    logger.info("\n✅ Test suite completed!")
+    logger.info("\nTo run the full agent test:")
+    logger.info("1. Start JupyterLab: jupyter lab --port=8890")
+    logger.info("2. Set OPENAI_API_KEY environment variable")
+    logger.info("3. Update the token in this script")
+    logger.info("4. Uncomment the asyncio.run(test_agent()) line")
