@@ -312,24 +312,14 @@ class ConversationManager:
     ):
         """Save conversations back to notebook metadata using YDoc to avoid file/live state conflicts"""
         try:
-            # Get YDoc extension from web_app settings (same fallback pattern as tools bridge)
-            ydoc_ext = None
-            
-            # Try 1: From tools bridge storage (may not exist due to singleton issues)
-            ydoc_ext = self.serverapp.web_app.settings.get("ydoc_extension")
+            # Get YDoc extension from web_app settings (jupyter_server_ydoc)
+            ydoc_ext = self.serverapp.web_app.settings.get("jupyter_server_ydoc")
             if ydoc_ext:
-                logger.info("✅ Found YDoc extension in web_app.settings['ydoc_extension']")
+                logger.info("✅ Found YDoc extension in web_app.settings")
             else:
-                logger.info("❌ YDoc extension not found in web_app.settings['ydoc_extension']")
-                
-                # Try 2: From jupyter_server_ydoc in settings (this should work)
-                ydoc_ext = self.serverapp.web_app.settings.get("jupyter_server_ydoc")
-                if ydoc_ext:
-                    logger.info("✅ Found YDoc extension in web_app.settings['jupyter_server_ydoc']")
-                else:
-                    logger.error("❌ YDoc extension not found in web_app.settings['jupyter_server_ydoc'] either")
-                    logger.error(f"Available settings keys: {list(self.serverapp.web_app.settings.keys())}")
-                    return
+                logger.error("❌ YDoc extension not found - jupyter_server_ydoc may not be loaded")
+                logger.error(f"Available settings keys: {list(self.serverapp.web_app.settings.keys())}")
+                return
 
             # Get live YDoc document (this is the authoritative live state)
             try:

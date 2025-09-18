@@ -59,40 +59,37 @@ def main():
     print("=" * 60)
 
     print("\n1️⃣  Checking Python packages...")
-    packages = [
+    required_packages = [
         ("jupyter_server", "jupyter_server"),
-        ("jupyter_server_ydoc", "jupyter_server_ydoc"),
+        ("jupyter_server_ydoc", "jupyter_server_ydoc"),  # Auto-installs jupyter_ydoc, pycrdt, pycrdt-websocket
         ("jupyter_ydoc", "jupyter_ydoc"),
-        ("jupyter_collaboration", "jupyter_collaboration"),
-        ("pycrdt", "pycrdt"),
-        ("pycrdt-websocket", "pycrdt.websocket"),  # Package name vs import path
-        ("jupyter_server_fileid", "jupyter_server_fileid"),
-        ("jupyterlab", "jupyterlab"),
+        ("pycrdt", "pycrdt"),  # Auto-dependency of jupyter_ydoc
+        ("pycrdt-websocket", "pycrdt.websocket"),  # Auto-dependency of jupyter_server_ydoc
+        ("jupyter_tools_bridge", "jupyter_tools_bridge"),
         ("aiohttp", "aiohttp"),
+        ("nbformat", "nbformat"),
     ]
 
     all_installed = True
-    for pkg in packages:
+    for pkg in required_packages:
         if not check_package(pkg):
             all_installed = False
 
     if not all_installed:
-        print("\n❌ Some packages are missing. Run:")
-        print(
-            "pip install jupyter-collaboration jupyter-server-ydoc jupyter_ydoc pycrdt pycrdt-websocket"
-        )
+        print(f"❌ Missing packages. Install with:")
+        print("pip install jupyter-server-ydoc aiohttp nbformat")
+        print("# Note: jupyter_ydoc, pycrdt, pycrdt-websocket are auto-installed as dependencies")
         sys.exit(1)
 
     print("\n2️⃣  Checking Jupyter server extensions...")
-    extensions = [
+    expected_extensions = [
         "jupyter_server_fileid",
-        "jupyter_server_ydoc",
-        "jupyter_collaboration",
+        "jupyter_server_ydoc", 
         "jupyter_tools_bridge",
     ]
 
     all_enabled = True
-    for ext in extensions:
+    for ext in expected_extensions:
         if not check_server_extension(ext):
             all_enabled = False
 

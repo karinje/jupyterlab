@@ -123,40 +123,12 @@ class BaseToolsHandler(APIHandler):
             self.log.info(f"[get_live_notebook] start path={path}")
             self.log.info(f"[get_live_notebook] settings keys={list(self.settings.keys())}")
 
-            # Try order: settings['ydoc_extension'] -> settings['jupyter_server_ydoc'] -> extension_manager -> singleton
-            ydoc_ext = None
-
-            # 1) Stored by our extension loader
-            ydoc_ext = self.settings.get("ydoc_extension")
-            self.log.info(f"[get_live_notebook] ydoc_extension in settings? {'yes' if ydoc_ext else 'no'}")
-
-            # 2) Directly provided by jupyter_server_ydoc in settings
-            if not ydoc_ext:
-                ydoc_ext = self.settings.get("jupyter_server_ydoc")
-                self.log.info(f"[get_live_notebook] jupyter_server_ydoc in settings? {'yes' if ydoc_ext else 'no'}")
-
-            # 3) Extension manager (metadata objects only, but log for visibility)
-            if not ydoc_ext:
-                serverapp = self.settings.get("serverapp")
-                self.log.info(f"[get_live_notebook] serverapp present? {'yes' if serverapp else 'no'}")
-                if serverapp and hasattr(serverapp, "extension_manager"):
-                    ext_manager = serverapp.extension_manager
-                    names = list(getattr(ext_manager, "extensions", {}).keys())
-                    self.log.info(f"[get_live_notebook] extension_manager extensions={names}")
-                    # NOTE: These are ExtensionPackage instances, not live extension; do not use directly
-
-            # 4) Last resort: singleton
-            if not ydoc_ext:
-                try:
-                    from jupyter_server_ydoc import YDocExtension
-
-                    ydoc_ext = YDocExtension.instance()
-                    self.log.info(f"[get_live_notebook] YDocExtension.instance() -> {'ok' if ydoc_ext else 'none'}")
-                except Exception as e:
-                    self.log.error(f"[get_live_notebook] YDocExtension.instance() failed: {e}")
+            # Get YDoc extension from settings (jupyter_server_ydoc)
+            ydoc_ext = self.settings.get("jupyter_server_ydoc")
+            self.log.info(f"[get_live_notebook] jupyter_server_ydoc in settings? {'yes' if ydoc_ext else 'no'}")
 
             if not ydoc_ext:
-                self.log.error("[get_live_notebook] Could not obtain YDocExtension by any method")
+                self.log.error("[get_live_notebook] Could not obtain YDocExtension from jupyter_server_ydoc")
                 return None
 
             has_get_doc = hasattr(ydoc_ext, "get_document")
