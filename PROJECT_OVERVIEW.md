@@ -699,6 +699,38 @@ grep -E "ERROR:|Failed" jlab.log
    - **Future Solution**: Private npm registry or single extension approach
    - **Priority**: LOW (only needed for production deployment)
 
+2. **Chat Notebook Switching Context Confusion** - **CRITICAL UX ISSUE**
+   - **Issue**: When chat is open in Notebook A and user switches to Notebook B, messages from both notebooks get mixed up
+   - **Root Cause**: WebSocket reconnects to new notebook but chat UI doesn't refresh conversation history
+   - **Symptoms**: 
+     - Chat UI shows Notebook A's history but new messages go to Notebook B's context
+     - User sees previous conversation but agent responds with wrong notebook context
+     - Messages appear to merge between different notebooks
+   - **Current Behavior**: 
+     - `notebookTracker.currentChanged` triggers WebSocket reconnection
+     - Backend correctly switches to new notebook's thread context
+     - Frontend keeps displaying old notebook's conversation history
+     - Race conditions between old/new WebSocket connections
+   - **Proposed Solution**: Complete Chat Context Reset on Notebook Switch
+     - **Phase 1**: Enhanced notebook change handler
+       - Clear chat UI display when `currentChanged` fires
+       - Load new notebook's conversation history via `loadConversationHistory()`
+       - Update connection info message with new notebook name
+       - Ensure clean WebSocket transition (close old before opening new)
+     - **Phase 2**: Visual feedback and confirmation
+       - Show "Switching to NotebookB.ipynb..." during transitions
+       - Display notebook name prominently in chat header
+       - Optional: Confirmation dialog when switching with unsent messages
+     - **Phase 3**: Session isolation (advanced)
+       - Create `ChatSession` objects per notebook
+       - Cache recently used sessions in memory
+       - Implement proper session switching logic
+   - **Priority**: HIGH (affects core user experience)
+   - **Files Affected**: 
+     - `packages/chat-extension/src/index.ts` - Notebook change handler
+     - `packages/chat/src/service.ts` - History loading and WebSocket management
+     - `packages/chat/src/widget.tsx` - UI state management and display clearing
+
 ### 🐛 **CRITICAL DEV WORKFLOW BUGS & SOLUTIONS**
 
 #### **Frontend Changes Not Reflecting in Browser**

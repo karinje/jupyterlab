@@ -30,7 +30,7 @@ def create_system_tools(chat_handler) -> List[StructuredTool]:
     chat_handler: instance with send_status, send_message, display_plan_cards
     """
 
-    async def respond_to_user(message: str, intent: str | None = None, thread_title: str | None = None) -> str:
+    async def respond_to_user(message: str, thread_title: str, intent: str | None = None) -> str:
         # Also surface completion as a status for visibility in UIs that highlight statuses
         try:
             if intent == "completion":
@@ -39,17 +39,10 @@ def create_system_tools(chat_handler) -> List[StructuredTool]:
         except Exception as e:
             logger.warning(f"Failed to send status: {e}")
         
-        # Save thread title if provided
-        if thread_title:
-            try:
-                await chat_handler.save_thread_title(thread_title)
-                logger.info(f"Saved thread title: {thread_title}")
-            except Exception as e:
-                logger.warning(f"Failed to save thread title: {e}")
-        
-        await chat_handler.send_message(message)
-        logger.info(f"Responded to user: intent={intent or 'none'}, title={thread_title or 'none'}, message={message[:100]}...")
-        return f"responded: intent={intent or 'none'}, title_saved={bool(thread_title)}"
+        # Send message with thread title - atomic operation
+        await chat_handler.send_message(message, thread_title=thread_title)
+        logger.info(f"Responded to user: intent={intent or 'none'}, title={thread_title}, message={message[:100]}...")
+        return f"responded: intent={intent or 'none'}, title_saved=True"
 
     async def create_plan(plan_steps: List[PlanStepOutput]) -> str:
         steps = [
@@ -60,7 +53,7 @@ def create_system_tools(chat_handler) -> List[StructuredTool]:
         logger.info(f"Created plan with {len(steps)} steps")
         return f"plan_created: steps={len(steps)}"
 
-    return [
+    tools = [
         StructuredTool.from_function(
             func=respond_to_user,
             name="RespondToUser",
@@ -76,3 +69,11 @@ def create_system_tools(chat_handler) -> List[StructuredTool]:
             coroutine=create_plan,
         ),
     ]
+    
+    # Add category metadata to system tools (these won't be shown to user)
+    for tool in tools:
+        if not tool.metadata:
+            tool.metadata = {}
+        tool.metadata['tool_category'] = "System Tools"
+    
+    return tools

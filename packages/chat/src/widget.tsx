@@ -65,7 +65,6 @@ export class ChatManager {
     this._dialogElement.innerHTML = `
       <div style="display: flex; align-items: center; justify-content: space-between; padding: 16px; border-bottom: 1px solid #e0e0e0; cursor: move;" id="chat-header">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 16px;">🤖</span>
           <span style="font-weight: 600; color: #333;">JupyterLab Assistant</span>
         </div>
         <button id="chat-close-btn" style="border: none; background: none; font-size: 18px; cursor: pointer; color: #666;">✕</button>
@@ -86,23 +85,6 @@ export class ChatManager {
       </div>
 
              <div id="chat-messages" style="flex: 1; padding: 16px; overflow-y: auto; background: #fafafa;">
-         <div id="welcome-section" style="text-align: center; color: #666; margin-bottom: 20px;">
-           <div style="font-size: 24px; margin-bottom: 8px;">🚀</div>
-           <h3 style="margin: 0 0 8px 0;">Welcome to JupyterLab Assistant</h3>
-           <p style="margin: 0; font-size: 14px;">I can help you with code, notebook analysis, and more!</p>
-
-           <div style="margin: 16px 0;">
-             <div style="padding: 8px 12px; background: #f0f0f0; border-radius: 8px; margin-bottom: 8px; font-size: 14px; color: #666; cursor: pointer;" onclick="document.querySelector('#chat-input').value = 'What\\'s in cell 0?'">
-               💡 "What's in cell 0?"
-             </div>
-             <div style="padding: 8px 12px; background: #f0f0f0; border-radius: 8px; margin-bottom: 8px; font-size: 14px; color: #666; cursor: pointer;" onclick="document.querySelector('#chat-input').value = 'Add a print statement'">
-               💡 "Add a print statement"
-             </div>
-             <div style="padding: 8px 12px; background: #f0f0f0; border-radius: 8px; margin-bottom: 8px; font-size: 14px; color: #666; cursor: pointer;" onclick="document.querySelector('#chat-input').value = 'Explain this function'">
-               💡 "Explain this function"
-             </div>
-           </div>
-         </div>
        </div>
 
       <div style="padding: 16px; border-top: 1px solid #e0e0e0;">
@@ -249,7 +231,9 @@ export class ChatManager {
     const newThreadBtn = this._dialogElement.querySelector('#new-thread-btn') as HTMLButtonElement;
     const clearDebugBtn = this._dialogElement.querySelector('#clear-debug-btn') as HTMLButtonElement;
 
-    threadHistoryBtn?.addEventListener('click', () => {
+    threadHistoryBtn?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       console.log('🔥 Thread history button clicked');
       this._toggleThreadHistory();
     });
@@ -294,6 +278,21 @@ export class ChatManager {
     document.body.appendChild(this._dialogElement);
     console.log('🔥 Dialog appended to body');
 
+    // Add click-outside detection to close thread history dropdown
+    document.addEventListener('click', (event) => {
+      const panel = this._dialogElement?.querySelector('#thread-history-panel') as HTMLElement;
+      const button = this._dialogElement?.querySelector('#thread-history-btn') as HTMLElement;
+      
+      if (panel && panel.style.display !== 'none') {
+        const target = event.target as HTMLElement;
+        
+        // Check if click is outside both the panel and the button
+        if (!panel.contains(target) && !button.contains(target)) {
+          this._hideThreadHistory();
+        }
+      }
+    });
+
     // Listen for chat service messages - NO DUPLICATE FILTERING
     this._chatService.messageAdded.connect((sender: any, message: any) => {
       console.log('🔥 Message received from service:', message);
@@ -305,11 +304,19 @@ export class ChatManager {
         return;
       }
       
-      // Filter out status messages - only show real conversation messages
-      if (message.content && !message.content.startsWith('[status]') && !message.content.startsWith('⏳')) {
-        this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content);
+      // Show all real-time messages (including status), but filter status from history
+      if (message.metadata?.fromHistory) {
+        // Historical messages: filter out status messages
+        if (message.content && !message.content.startsWith('[status]') && !message.content.startsWith('⏳')) {
+          this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp);
+        } else {
+          console.log('🔥 Filtering out historical status message:', message.content.substring(0, 50));
+        }
       } else {
-        console.log('🔥 Filtering out status message:', message.content.substring(0, 50));
+        // Real-time messages: show everything (including status for live feedback)
+        if (message.content) {
+          this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp);
+        }
       }
     });
 
@@ -320,7 +327,7 @@ export class ChatManager {
       // Filter out status messages from history too
       if (msg.content && !msg.content.startsWith('[status]') && !msg.content.startsWith('⏳')) {
         console.log(`🔄 Displaying history message: ${msg.role} - ${msg.content.substring(0, 100)}...`);
-        this._addMessageToDisplay(msg.role as 'user' | 'assistant', msg.content);
+        this._addMessageToDisplay(msg.role as 'user' | 'assistant', msg.content, msg.timestamp);
       } else {
         console.log(`🔄 Filtering out status message from history: ${msg.content.substring(0, 50)}...`);
       }
@@ -328,11 +335,15 @@ export class ChatManager {
 
     // Load threads for the thread selector
     await this._loadThreads();
+
+    // Show connection info (always, not saved to history)
+    await this._showConnectionInfo();
   }
 
   private _addMessageToDisplay(
     role: 'user' | 'assistant',
-    content: string
+    content: string,
+    timestamp?: Date
   ): void {
     console.log('🔥 Adding message to display:', role, content);
     const messagesContainer =
@@ -342,19 +353,11 @@ export class ChatManager {
       return;
     }
 
-    // Clear welcome message if this is the first real message
-    const welcomeSection = messagesContainer.querySelector('#welcome-section');
-    if (welcomeSection && (role === 'user' || role === 'assistant')) {
-      console.log('🔥 Removing welcome section');
-      welcomeSection.remove();
-    }
+    // No welcome section to remove anymore
 
     const messageDiv = document.createElement('div');
     messageDiv.style.cssText = `
-      display: flex;
-      gap: 8px;
       margin-bottom: 12px;
-      align-items: flex-start;
     `;
 
     const isUser = role === 'user';
@@ -366,13 +369,10 @@ export class ChatManager {
     if (hasCards) {
       // Render cards instead of plain text
       messageDiv.innerHTML = `
-        <div style="font-size: 16px; margin-top: 4px; min-width: 20px;">
-          ${isUser ? '👤' : '🤖'}
-        </div>
         <div style="flex: 1;">
           ${this._renderCards(cards)}
           <div style="font-size: 11px; color: #666; margin-top: 4px;">
-            ${new Date().toLocaleTimeString([], {
+            ${(timestamp || new Date()).toLocaleTimeString([], {
               hour: '2-digit',
               minute: '2-digit'
             })}
@@ -382,9 +382,6 @@ export class ChatManager {
     } else {
       // Render regular message
       messageDiv.innerHTML = `
-        <div style="font-size: 16px; margin-top: 4px; min-width: 20px;">
-          ${isUser ? '👤' : '🤖'}
-        </div>
         <div style="flex: 1;">
           <div style="background: ${isUser ? '#007acc' : '#f5f5f5'}; color: ${
             isUser ? 'white' : '#333'
@@ -392,7 +389,7 @@ export class ChatManager {
             ${content.replace(/\n/g, '<br>')}
           </div>
           <div style="font-size: 11px; color: #666; margin-top: 4px;">
-            ${new Date().toLocaleTimeString([], {
+            ${(timestamp || new Date()).toLocaleTimeString([], {
               hour: '2-digit',
               minute: '2-digit'
             })}
@@ -582,13 +579,58 @@ export class ChatManager {
       this._dialogElement?.querySelector('#chat-messages');
     if (!messagesContainer) return;
 
-    messagesContainer.innerHTML = `
-      <div style="text-align: center; color: #666; margin-bottom: 20px;">
-        <div style="font-size: 24px; margin-bottom: 8px;">🚀</div>
-        <h3 style="margin: 0 0 8px 0;">Welcome to JupyterLab Assistant</h3>
-        <p style="margin: 0; font-size: 14px;">I can help you with code, notebook analysis, and more!</p>
+    messagesContainer.innerHTML = '';
+  }
+
+  private async _showConnectionInfo(): Promise<void> {
+    try {
+      // Get notebook name from chat service
+      const notebookPath = (this._chatService as any)._cellManager?.getActiveNotebookPath?.() || 'Untitled.ipynb';
+      const notebookName = notebookPath.split('/').pop() || notebookPath;
+
+      // Get available tools
+      const toolsInfo = await (this._chatService as any).getAvailableTools();
+      const toolCategories = toolsInfo.categories || [];
+
+      // Create connection message
+      let connectionText = `Connected to notebook ${notebookName}`;
+      
+      if (toolCategories.length > 0) {
+        connectionText += ` with ${toolCategories.join(', ')}`;
+      }
+
+      // Display as assistant message but don't save to history
+      this._addConnectionMessage(connectionText);
+    } catch (error) {
+      console.error('Error showing connection info:', error);
+      // Fallback connection message
+      const notebookPath = (this._chatService as any)._cellManager?.getActiveNotebookPath?.() || 'Untitled.ipynb';
+      const notebookName = notebookPath.split('/').pop() || notebookPath;
+      this._addConnectionMessage(`Connected to notebook ${notebookName}`);
+    }
+  }
+
+  private _addConnectionMessage(content: string): void {
+    const messagesContainer = this._dialogElement?.querySelector('#chat-messages');
+    if (!messagesContainer) return;
+
+    const messageDiv = document.createElement('div');
+    messageDiv.style.cssText = `
+      margin-bottom: 12px;
+      opacity: 0.7;
+    `;
+
+    // Display like assistant message but with subtle styling
+    messageDiv.innerHTML = `
+      <div style="flex: 1;">
+        <div style="background: #f0f8ff; color: #666; padding: 8px 12px; border-radius: 8px; font-size: 13px; word-wrap: break-word; max-width: 280px; border-left: 3px solid #007acc;">
+          ${content.replace(/\n/g, '<br>')}
+        </div>
       </div>
     `;
+
+    messagesContainer.appendChild(messageDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 
   private async _loadThreads(): Promise<void> {
@@ -640,10 +682,18 @@ export class ChatManager {
         </div>
       `;
       
-      threadItem.addEventListener('click', async () => {
+      threadItem.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
         console.log('🔄 Switching to thread:', thread.id);
-        await this._switchToThread(thread.id);
+        
+        // Immediately hide dropdown and update UI selection
         this._hideThreadHistory();
+        this._currentThreadId = thread.id;
+        this._updateThreadList(); // Update selection highlight immediately
+        
+        // Then perform the async switch
+        await this._switchToThread(thread.id);
       });
       
       threadItem.addEventListener('mouseenter', () => {
@@ -710,12 +760,14 @@ export class ChatManager {
 
   private async _switchToThread(threadId: string): Promise<void> {
     try {
-      console.log(`🔄 Switching from ${this._currentThreadId} to ${threadId}`);
-      this._currentThreadId = threadId;
+      console.log(`🔄 Switching to thread: ${threadId}`);
       
       if ((this._chatService as any).switchThread) {
         await (this._chatService as any).switchThread(threadId);
         console.log('✅ Thread switched successfully');
+        
+        // Show connection info after switching
+        await this._showConnectionInfo();
         
         // Refresh thread list to show all available threads
         await this._loadThreads();
@@ -731,6 +783,9 @@ export class ChatManager {
     this._chatService.clearHistory();
     this._clearMessagesDisplay();
     this._hideThreadHistory();
+    
+    // Show connection info for new thread
+    await this._showConnectionInfo();
     
     // Reload thread list from server but don't auto-select any thread
     const threadsData = await (this._chatService as any).loadThreads();

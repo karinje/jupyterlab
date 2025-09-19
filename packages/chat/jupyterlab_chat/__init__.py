@@ -245,7 +245,7 @@ class ConversationManager:
             return self._create_empty_conversations()
 
     async def save_conversation_message(
-        self, notebook_path: str, message: Dict, thread_id: Optional[str] = None
+        self, notebook_path: str, message: Dict, thread_id: Optional[str] = None, thread_title: Optional[str] = None
     ) -> str:
         """Save a message to conversation thread and return thread_id"""
         try:
@@ -256,9 +256,9 @@ class ConversationManager:
             if not thread_id:
                 thread_id = str(uuid.uuid4())
                 conversations["threads"][thread_id] = {
-                    "created": datetime.utcnow().isoformat(),
-                    "last_updated": datetime.utcnow().isoformat(),
-                    "title": self._generate_thread_title(message.get("content", "")),
+                                    "created": datetime.utcnow().isoformat() + 'Z',
+                "last_updated": datetime.utcnow().isoformat() + 'Z',
+                    "title": thread_title or self._generate_thread_title(message.get("content", "")),
                     "messages": [],
                 }
                 conversations["active_thread"] = thread_id
@@ -267,11 +267,15 @@ class ConversationManager:
             # Add message to thread
             if thread_id in conversations["threads"]:
                 conversations["threads"][thread_id]["messages"].append(
-                    {**message, "timestamp": datetime.utcnow().isoformat()}
+                    {**message, "timestamp": datetime.utcnow().isoformat() + 'Z'}
                 )
                 conversations["threads"][thread_id]["last_updated"] = (
-                    datetime.utcnow().isoformat()
+                    datetime.utcnow().isoformat() + 'Z'
                 )
+                # Update thread title if provided (atomic with message save)
+                if thread_title:
+                    conversations["threads"][thread_id]["title"] = thread_title
+                    logger.info(f"💾 Updated thread title to: '{thread_title}' for thread {thread_id}")
                 conversations["active_thread"] = thread_id
 
                 # Update thread order (move to front)
@@ -444,7 +448,7 @@ class ChatStatusHandler(APIHandler):
                                     "thread_id": item.get("thread_id"),
                                     "tool_call_id": item.get("tool_call_id"),
                                     "timestamp": item.get("timestamp")
-                                    or datetime.utcnow().isoformat(),
+                                    or datetime.utcnow().isoformat() + 'Z',
                                     "payload": {
                                         "status": item.get("status")
                                         or "working",
@@ -488,6 +492,7 @@ class ChatMessageHandler(APIHandler):
                     notebook_path = item.get("notebook_path")
                     message_text = item.get("content") or item.get("message") or ""
                     thread_id = item.get("thread_id")  # Extract thread_id from request
+                    thread_title = item.get("thread_title")  # Extract thread_title from request
                     if not notebook_path:
                         # Resolve notebook path from active sessions
                         import aiohttp
@@ -506,12 +511,13 @@ class ChatMessageHandler(APIHandler):
                                         if isinstance(sessions, list) and len(sessions) > 0:
                                             notebook_path = sessions[0].get("path")
                     if notebook_path and message_text:
-                        # Save assistant message to YDoc metadata (fixed race condition)
+                        # Save assistant message to YDoc metadata (atomic with title update)
                         conv = ConversationManager(self.serverapp)
                         await conv.save_conversation_message(
                             notebook_path,
                             {"role": "assistant", "content": message_text},
                             thread_id,  # Pass thread_id to save to same thread as user message
+                            thread_title,  # Pass thread_title for atomic update
                         )
 
                         # Broadcast live assistant message
@@ -530,7 +536,7 @@ class ChatMessageHandler(APIHandler):
                                     "thread_id": item.get("thread_id"),
                                     "tool_call_id": item.get("tool_call_id"),
                                     "timestamp": item.get("timestamp")
-                                    or datetime.utcnow().isoformat(),
+                                    or datetime.utcnow().isoformat() + 'Z',
                                     "payload": {
                                         "role": "assistant",
                                         "content": message_text,
@@ -684,7 +690,7 @@ class ChatThreadTitleHandler(APIHandler):
             if target_thread_id and target_thread_id in conversations.get("threads", {}):
                 # Update thread title
                 conversations["threads"][target_thread_id]["title"] = title
-                conversations["threads"][target_thread_id]["last_updated"] = datetime.utcnow().isoformat()
+                conversations["threads"][target_thread_id]["last_updated"] = datetime.utcnow().isoformat() + 'Z'
                 
                 # Save updated conversations
                 await self.conversation_manager._save_conversations_to_notebook(notebook_path, conversations)
@@ -698,6 +704,55 @@ class ChatThreadTitleHandler(APIHandler):
 
         except Exception as e:
             logger.error(f"Error saving thread title: {e}")
+            self.set_status(500)
+            self.finish({"error": str(e)})
+
+
+class ChatToolsHandler(APIHandler):
+    """Handler for getting available tools"""
+
+    def check_xsrf_cookie(self):
+        """Disable XSRF check for this endpoint"""
+        pass
+
+    @tornado.web.authenticated
+    async def get(self):
+        """Get available tools for the agent"""
+        try:
+            # Get actual bound tools from agent - THE REAL SOURCE OF TRUTH
+            from jupyter_agent_lg.agent import DataAnalysisAgent
+            
+            # Create a temporary agent to get tool info
+            # This ensures we get the EXACT same tools that are actually bound
+            server_url = f"http://localhost:{self.serverapp.port}"
+            token = self.serverapp.token
+            
+            # Create agent with minimal config just to get tool info
+            # Use a real API key if available, otherwise use dummy (tools are created regardless)
+            openai_key = os.environ.get('OPENAI_API_KEY', 'dummy-key-for-tool-detection')
+            temp_agent = DataAnalysisAgent(
+                server_url=server_url,
+                token=token,
+                openai_api_key=openai_key,
+                default_notebook_path="temp.ipynb"
+            )
+            
+            # Get the REAL tool info from the agent
+            try:
+                tool_info = temp_agent.get_tool_info()
+
+                self.finish(tool_info)
+            except Exception as e:
+                logger.error(f"🔧 Error getting tool info from agent: {e}")
+                # Fallback to basic tools
+                self.finish({
+                    "categories": ["Jupyter Notebook Tools"],
+                    "tools": {"Jupyter Notebook Tools": ["insert_and_execute_cell", "delete_cell"]},
+                    "total_tools": 2
+                })
+            
+        except Exception as e:
+            logger.error(f"Error getting tools info: {e}")
             self.set_status(500)
             self.finish({"error": str(e)})
 
@@ -1292,6 +1347,7 @@ class ChatExtension(ExtensionApp):
             (r"/api/chat/openai", ChatOpenAIHandler),
             (r"/api/chat/threads", ChatThreadsHandler),
             (r"/api/chat/thread-title", ChatThreadTitleHandler),
+            (r"/api/chat/tools", ChatToolsHandler),
             (r"/api/chat/debug", ChatDebugHandler),
         ]
         self.handlers.extend(handlers)
@@ -1311,6 +1367,7 @@ def _load_jupyter_server_extension(server_app):
         (r"/api/chat/stream", ChatStreamHandler),
         (r"/api/chat/threads", ChatThreadsHandler),
         (r"/api/chat/thread-title", ChatThreadTitleHandler),
+        (r"/api/chat/tools", ChatToolsHandler),
         (r"/api/chat/debug", ChatDebugHandler),
     ]
     server_app.web_app.add_handlers(".*$", handlers)

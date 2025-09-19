@@ -340,6 +340,32 @@ export class ChatService implements IChatService {
     }
   }
 
+  async getAvailableTools(): Promise<any> {
+    try {
+      const settings = ServerConnection.makeSettings();
+      const requestUrl = new URL('/api/chat/tools', settings.baseUrl).href;
+
+      const response = await ServerConnection.makeRequest(
+        requestUrl,
+        {
+          method: 'GET'
+        },
+        settings
+      );
+
+      if (!response.ok) {
+        console.warn('Failed to get available tools:', response.status);
+        return { categories: [], tools: {} };
+      }
+
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error('Error getting available tools:', error);
+      return { categories: [], tools: {} };
+    }
+  }
+
   /**
    * Clear chat history
    */

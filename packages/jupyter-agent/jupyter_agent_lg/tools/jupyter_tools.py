@@ -99,7 +99,7 @@ def create_jupyter_tools(
             tool_logger.error(f"Error deleting cell: {e}")
             return f"Error: {str(e)}"
 
-    # Create the tools
+    # Create the tools with category metadata
     tools = [
         StructuredTool.from_function(
             func=insert_and_execute_cell,
@@ -116,6 +116,12 @@ def create_jupyter_tools(
             coroutine=delete_cell,
         ),
     ]
+    
+    # Add category metadata to all Jupyter tools
+    for tool in tools:
+        if not tool.metadata:
+            tool.metadata = {}
+        tool.metadata['tool_category'] = "Jupyter Notebook Tools"
 
     tool_logger.info(
         f"Created {len(tools)} Jupyter tools for notebook: {notebook_path}"

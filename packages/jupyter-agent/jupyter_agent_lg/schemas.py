@@ -97,8 +97,8 @@ class RespondToUserArgs(BaseModel):
     intent: Optional[Literal["completion", "clarification", "status_update"]] = Field(
         default=None, description="Optional intent tag for the response"
     )
-    thread_title: Optional[str] = Field(
-        default=None, description="Optional title for the conversation thread (generated from conversation context)"
+    thread_title: str = Field(
+        description="REQUIRED: Generate a concise, descriptive title (3-8 words) summarizing this conversation topic. Examples: 'Data visualization plots', 'Sales analysis discussion', 'Python debugging help'"
     )
 
 

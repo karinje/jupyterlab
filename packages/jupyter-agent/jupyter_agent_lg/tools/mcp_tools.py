@@ -176,8 +176,8 @@ def create_mcp_tools(mcp_client) -> List[StructuredTool]:
             logger.error(f"Error in get_database_info: {e}")
             return f"Error getting database info: {str(e)}"
 
-    # Create and return tools
-    return [
+    # Create and return tools with category metadata
+    tools = [
         StructuredTool.from_function(
             func=query_snowflake,
             name="query_snowflake",
@@ -205,3 +205,11 @@ def create_mcp_tools(mcp_client) -> List[StructuredTool]:
             coroutine=get_database_info,
         ),
     ]
+    
+    # Add category metadata to all MCP tools
+    for tool in tools:
+        if not tool.metadata:
+            tool.metadata = {}
+        tool.metadata['tool_category'] = "Snowflake MCP Tools"
+    
+    return tools

@@ -84,6 +84,7 @@ class ChatHandler:
         notebook_path: Optional[str] = None,
         tool_call_id: Optional[str] = None,
         thread_id: Optional[str] = None,
+        thread_title: Optional[str] = None,
     ):
         """Send a message to the chat UI"""
         try:
@@ -102,6 +103,7 @@ class ChatHandler:
                         "notebook_path": notebook_path or self.default_notebook_path,
                         "tool_call_id": tool_call_id,
                         "thread_id": thread_id or self.current_thread_id,
+                        "thread_title": thread_title,
                     },
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=5),
@@ -275,6 +277,7 @@ class DataAnalysisAgent:
                         description=t.description,
                         args_schema=StatusModel,
                         coroutine=t.coroutine,
+                        metadata=getattr(t, 'metadata', None),  # Preserve metadata
                     )
                     augmented.append(new_tool)
                 except Exception as e:
@@ -325,6 +328,47 @@ class DataAnalysisAgent:
         logger.info(
             f"🤖 DataAnalysisAgent initialized with {len(original_tools)} tools (augmented schemas for binding)"
         )
+        
+        # Store tool info for API access
+        self._bound_tools = original_tools
+        self._tool_categories = self._categorize_tools(original_tools)
+
+    def _categorize_tools(self, tools) -> Dict[str, list]:
+        """Categorize tools by their metadata - NO HARDCODING!"""
+        categories = {}
+        
+        for tool in tools:
+            tool_name = getattr(tool, 'name', str(tool))
+            
+            # Get tool_category from metadata
+            tool_metadata = getattr(tool, 'metadata', {}) or {}
+            tool_category = tool_metadata.get('tool_category', 'Other Tools')
+            
+
+            
+            # Skip system tools - don't show to user
+            if tool_category == 'System Tools':
+                continue
+            
+            # Use the tool's own category metadata
+            if tool_category not in categories:
+                categories[tool_category] = []
+            categories[tool_category].append(tool_name)
+        
+        return categories
+    
+    def get_available_tool_categories(self) -> list:
+        """Get list of available tool categories (public API)"""
+        return list(self._tool_categories.keys())
+    
+    def get_tool_info(self) -> Dict[str, Any]:
+        """Get complete tool information (public API)"""
+
+        return {
+            'categories': list(self._tool_categories.keys()),
+            'tools': self._tool_categories,
+            'total_tools': len(self._bound_tools)
+        }
 
     def _list_bound_tools_and_params(self, llm) -> List[Dict[str, Any]]:
         """Return provider-agnostic view of bound tools from a tool-bound LLM runnable.
@@ -824,7 +868,7 @@ class DataAnalysisAgent:
  Guidance:
  - Use Jupyter tools for notebook edits/execution.
  - Use Snowflake tools for external data queries.
- - Use RespondToUser to talk to the user (clarifications, updates). For completion, call RespondToUser(intent="completion").
+ - Use RespondToUser to talk to the user (clarifications, updates). For completion, call RespondToUser(intent="completion", thread_title="Brief descriptive title").
  - Use CreatePlan to present a multi-step plan (explicit plan_steps).
 
  Contex
