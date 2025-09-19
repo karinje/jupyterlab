@@ -97,6 +97,9 @@ class RespondToUserArgs(BaseModel):
     intent: Optional[Literal["completion", "clarification", "status_update"]] = Field(
         default=None, description="Optional intent tag for the response"
     )
+    thread_title: Optional[str] = Field(
+        default=None, description="Optional title for the conversation thread (generated from conversation context)"
+    )
 
 
 class CreatePlanArgs(BaseModel):

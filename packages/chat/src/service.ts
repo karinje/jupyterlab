@@ -25,6 +25,8 @@ export class ChatService implements IChatService {
   private _wsConnId: string | null = null;
   private _reconnectTimer: any = null;
   private _reconnectAttempts = 0;
+  private _selectedThreadId: string | null = null;
+  private _currentRequest: Promise<any> | null = null;  // Track current request for cancellation
 
   constructor(llmProvider: ILLMProvider, cellManager: ICellManager) {
     console.log('ChatService constructor called');
@@ -68,13 +70,22 @@ export class ChatService implements IChatService {
       const context = this._buildContext();
 
       console.log('About to send to LLM...');
-      // Send to LLM
-      const response = await this._llmProvider.sendMessage(message, context);
+      // Send to LLM (track for cancellation)
+      this._currentRequest = this._llmProvider.sendMessage(message, context);
+      const response = await this._currentRequest;
+      this._currentRequest = null;
       console.log('LLM response received:', response);
 
       // Do not add assistant message from HTTP response; rely solely on WS stream
       console.log('[CHAT] HTTP return ignored; waiting for WS broadcast');
     } catch (error) {
+      this._currentRequest = null;
+      
+      if (error.name === 'AbortError') {
+        console.log('🛑 Message request was cancelled');
+        return;
+      }
+      
       console.error('Error in ChatService.sendMessage:', error);
       // Add error message
       const errorMessage: IChatMessage = {
@@ -90,6 +101,14 @@ export class ChatService implements IChatService {
     }
   }
 
+  private async _cancelCurrentRequest(): Promise<void> {
+    if (this._currentRequest) {
+      console.log('🛑 Cancelling current request');
+      // Note: This won't actually cancel HTTP requests, but will prevent processing
+      this._currentRequest = null;
+    }
+  }
+
   /**
    * Get chat history
    */
@@ -98,10 +117,236 @@ export class ChatService implements IChatService {
   }
 
   /**
+   * Load conversation history from server for current notebook
+   */
+    async loadConversationHistory(notebookPath: string): Promise<void> {
+    try {
+      console.log('🔄 Loading conversation history for:', notebookPath);
+
+      const settings = ServerConnection.makeSettings();
+      const requestUrl = new URL('/api/chat/threads', settings.baseUrl).href;
+
+      const response = await ServerConnection.makeRequest(
+        `${requestUrl}?notebook_path=${encodeURIComponent(notebookPath)}`,
+        {
+          method: 'GET'
+        },
+        settings
+      );
+
+      if (!response.ok) {
+        console.warn('Failed to load conversation history:', response.status);
+        return;
+      }
+
+      const data = await response.json();
+      const allThreads = data.threads || {};
+      const threadCount = Object.keys(allThreads).length;
+
+      console.log(`📚 Frontend: Found ${threadCount} conversation threads for ${notebookPath}`);
+
+      // Find the most recent thread based on last_updated timestamp
+      let mostRecentThreadId = data.active_thread;
+      let mostRecentTime = 0;
+
+      if (threadCount > 0) {
+        for (const [tid, threadData] of Object.entries(allThreads)) {
+          const messageCount = (threadData as any).messages?.length || 0;
+          const lastUpdated = (threadData as any).last_updated;
+          const updateTime = lastUpdated ? new Date(lastUpdated).getTime() : 0;
+
+          console.log(`  📝 Frontend: Thread ${tid.substring(0, 8)}... has ${messageCount} messages (updated: ${lastUpdated})`);
+
+          if (updateTime > mostRecentTime) {
+            mostRecentTime = updateTime;
+            mostRecentThreadId = tid;
+          }
+        }
+      }
+
+      console.log(`🎯 Frontend: Most recent thread ID: ${mostRecentThreadId} (was active: ${data.active_thread})`);
+      const activeThreadId = mostRecentThreadId;
+
+      if (activeThreadId && data.threads && data.threads[activeThreadId]) {
+        const threadMessages = data.threads[activeThreadId].messages || [];
+
+        console.log(`✅ Frontend: Loading ${threadMessages.length} messages from active thread`);
+
+        // Clear current messages and load from history
+        this._messages = [];
+
+        // Convert server messages to chat messages
+        for (const msg of threadMessages) {
+          const chatMessage: IChatMessage = {
+            id: UUID.uuid4(),
+            role: msg.role as 'user' | 'assistant',
+            content: msg.content,
+            timestamp: new Date(msg.timestamp || Date.now()),
+            metadata: { fromHistory: true }
+          };
+          this._messages.push(chatMessage);
+          this._messageAdded.emit(chatMessage);
+        }
+
+        console.log(`✅ Frontend: Successfully loaded ${threadMessages.length} messages into chat UI`);
+
+        // Log first and last messages for verification
+        if (threadMessages.length > 0) {
+          const firstMsg = threadMessages[0];
+          const lastMsg = threadMessages[threadMessages.length - 1];
+          console.log(`  📖 Frontend: First message: ${firstMsg.role} - ${firstMsg.content.substring(0, 100)}...`);
+          if (threadMessages.length > 1) {
+            console.log(`  📖 Frontend: Last message: ${lastMsg.role} - ${lastMsg.content.substring(0, 100)}...`);
+          }
+        }
+      } else {
+        console.log('📝 Frontend: No active thread found, starting fresh conversation');
+      }
+    } catch (error) {
+      console.error('Error loading conversation history:', error);
+    }
+  }
+
+  async loadThreads(): Promise<any> {
+    try {
+      const notebookPath = this._cellManager.getActiveNotebookPath?.() || 'Untitled.ipynb';
+      console.log('🔄 Loading threads for:', notebookPath);
+
+      const settings = ServerConnection.makeSettings();
+      const requestUrl = new URL('/api/chat/threads', settings.baseUrl).href;
+
+      const response = await ServerConnection.makeRequest(
+        `${requestUrl}?notebook_path=${encodeURIComponent(notebookPath)}`,
+        {
+          method: 'GET'
+        },
+        settings
+      );
+
+      if (!response.ok) {
+        console.warn('Failed to load threads:', response.status);
+        return { threads: [], selected_thread_id: null };
+      }
+
+      const data = await response.json();
+      console.log(`📚 Loaded ${data.threads?.length || 0} threads`);
+      return data;
+    } catch (error) {
+      console.error('Error loading threads:', error);
+      return { threads: [], selected_thread_id: null };
+    }
+  }
+
+  async switchThread(threadId: string): Promise<void> {
+    try {
+      console.log('🔄 Switching to thread:', threadId);
+      
+      // Cancel any current request before switching
+      await this._cancelCurrentRequest();
+      
+      const notebookPath = this._cellManager.getActiveNotebookPath?.() || 'Untitled.ipynb';
+      const settings = ServerConnection.makeSettings();
+      const requestUrl = new URL('/api/chat/threads', settings.baseUrl).href;
+
+      const response = await ServerConnection.makeRequest(
+        `${requestUrl}?notebook_path=${encodeURIComponent(notebookPath)}`,
+        {
+          method: 'GET'
+        },
+        settings
+      );
+
+      if (!response.ok) {
+        console.warn('Failed to load threads for switching:', response.status);
+        return;
+      }
+
+      const data = await response.json();
+      const selectedThread = data.threads?.find((t: any) => t.id === threadId);
+      
+      if (!selectedThread) {
+        console.warn('Thread not found:', threadId);
+        return;
+      }
+
+      console.log(`✅ Switching to thread: ${selectedThread.title} (${selectedThread.message_count} messages)`);
+
+      // Set the selected thread ID
+      this._selectedThreadId = threadId;
+
+      // Clear current messages completely
+      this._messages = [];
+      
+      // Emit a special signal to clear the UI first
+      this._messageAdded.emit({
+        id: 'CLEAR_MESSAGES',
+        role: 'assistant',
+        content: '',
+        timestamp: new Date(),
+        metadata: { action: 'clear' }
+      });
+
+      // Convert server messages to chat messages
+      for (const msg of selectedThread.messages || []) {
+        const chatMessage: IChatMessage = {
+          id: UUID.uuid4(),
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content,
+          timestamp: new Date(msg.timestamp || Date.now()),
+          metadata: { fromHistory: true, threadId: threadId }
+        };
+        this._messages.push(chatMessage);
+        this._messageAdded.emit(chatMessage);
+      }
+
+      console.log(`✅ Successfully switched to thread with ${selectedThread.message_count} messages`);
+    } catch (error) {
+      console.error('Error switching thread:', error);
+    }
+  }
+
+  async clearAllConversations(): Promise<void> {
+    try {
+      const notebookPath = this._cellManager.getActiveNotebookPath?.() || 'Untitled.ipynb';
+      console.log('🧹 Clearing all conversations for:', notebookPath);
+
+      const settings = ServerConnection.makeSettings();
+      const requestUrl = new URL('/api/chat/debug', settings.baseUrl).href;
+
+      const response = await ServerConnection.makeRequest(
+        requestUrl,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'clear_conversations',
+            notebook_path: notebookPath
+          }),
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        },
+        settings
+      );
+
+      if (!response.ok) {
+        console.warn('Failed to clear conversations:', response.status);
+        return;
+      }
+
+      const data = await response.json();
+      console.log('✅ Conversations cleared:', data.message);
+    } catch (error) {
+      console.error('Error clearing conversations:', error);
+    }
+  }
+
+  /**
    * Clear chat history
    */
   clearHistory(): void {
     this._messages = [];
+    this._selectedThreadId = null;  // Clear selected thread for new conversation
+    console.log('🧹 Cleared chat history and selected thread ID');
   }
 
   /**
@@ -110,10 +355,16 @@ export class ChatService implements IChatService {
   private _buildContext(): any {
     try {
       const notebookPath = this._cellManager.getActiveNotebookPath?.() || null;
-      return { notebook_path: notebookPath };
+      return { 
+        notebook_path: notebookPath,
+        selected_thread_id: this._selectedThreadId
+      };
     } catch (error) {
       console.warn('Failed to build minimal context:', error);
-      return { notebook_path: null };
+      return { 
+        notebook_path: null,
+        selected_thread_id: this._selectedThreadId
+      };
     }
   }
 

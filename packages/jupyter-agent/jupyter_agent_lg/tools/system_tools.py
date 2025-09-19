@@ -30,7 +30,7 @@ def create_system_tools(chat_handler) -> List[StructuredTool]:
     chat_handler: instance with send_status, send_message, display_plan_cards
     """
 
-    async def respond_to_user(message: str, intent: str | None = None) -> str:
+    async def respond_to_user(message: str, intent: str | None = None, thread_title: str | None = None) -> str:
         # Also surface completion as a status for visibility in UIs that highlight statuses
         try:
             if intent == "completion":
@@ -39,9 +39,17 @@ def create_system_tools(chat_handler) -> List[StructuredTool]:
         except Exception as e:
             logger.warning(f"Failed to send status: {e}")
         
+        # Save thread title if provided
+        if thread_title:
+            try:
+                await chat_handler.save_thread_title(thread_title)
+                logger.info(f"Saved thread title: {thread_title}")
+            except Exception as e:
+                logger.warning(f"Failed to save thread title: {e}")
+        
         await chat_handler.send_message(message)
-        logger.info(f"Responded to user: intent={intent or 'none'}, message={message[:100]}...")
-        return f"responded: intent={intent or 'none'}"
+        logger.info(f"Responded to user: intent={intent or 'none'}, title={thread_title or 'none'}, message={message[:100]}...")
+        return f"responded: intent={intent or 'none'}, title_saved={bool(thread_title)}"
 
     async def create_plan(plan_steps: List[PlanStepOutput]) -> str:
         steps = [

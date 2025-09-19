@@ -1,4 +1,5 @@
 import { IChatService } from './tokens';
+import { getProviderForModel } from './models';
 
 /**
  * Chat Manager - handles the floating dialog with pure DOM manipulation
@@ -7,7 +8,9 @@ export class ChatManager {
   private _isVisible: boolean = false;
   private _chatService: IChatService;
   private _dialogElement: HTMLDivElement | null = null;
-  private _lastAssistantText: { text: string; ts: number } | null = null;
+  private _currentThreadId: string | null = null;
+  private _availableThreads: any[] = [];
+
 
   constructor(chatService: IChatService) {
     this._chatService = chatService;
@@ -33,7 +36,7 @@ export class ChatManager {
     }
   }
 
-  private _createDialog(): void {
+  private async _createDialog(): Promise<void> {
     if (this._dialogElement) {
       console.log('🔥 Dialog already exists, returning');
       return;
@@ -67,6 +70,20 @@ export class ChatManager {
         </div>
         <button id="chat-close-btn" style="border: none; background: none; font-size: 18px; cursor: pointer; color: #666;">✕</button>
       </div>
+      
+
+      
+      <div id="thread-history-panel" style="
+        display: none;
+        background: #ffffff;
+        border-bottom: 1px solid #e0e0e0;
+        max-height: 200px;
+        overflow-y: auto;
+      ">
+        <div id="thread-list" style="padding: 8px;">
+          <div style="text-align: center; color: #666; padding: 16px;">Loading threads...</div>
+        </div>
+      </div>
 
              <div id="chat-messages" style="flex: 1; padding: 16px; overflow-y: auto; background: #fafafa;">
          <div id="welcome-section" style="text-align: center; color: #666; margin-bottom: 20px;">
@@ -94,21 +111,65 @@ export class ChatManager {
           <button id="chat-send-btn" style="padding: 8px 12px; background: #007acc; color: white; border: none; border-radius: 6px; cursor: pointer;">➤</button>
         </div>
 
-        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <select id="chat-provider" style="padding: 4px 8px; border: 1px solid #c0c0c0; border-radius: 4px; font-size: 12px;">
-            <option value="openai" selected>🤖 OpenAI</option>
-            <option value="anthropic">🧠 Anthropic</option>
-            <option value="google" disabled>🔍 Google (Soon)</option>
-          </select>
-          <select id="chat-model" style="padding: 4px 8px; border: 1px solid #c0c0c0; border-radius: 4px; font-size: 12px;">
+        <div style="display: flex; gap: 8px; align-items: center; justify-content: space-between;">
+          <!-- Model Selection -->
+          <select id="chat-model" style="padding: 6px 10px; border: 1px solid #c0c0c0; border-radius: 4px; font-size: 12px; min-width: 140px;">
             <option value="gpt-4o" selected>GPT-4o</option>
             <option value="gpt-4o-mini">GPT-4o Mini</option>
             <option value="o1-preview">o1-preview</option>
             <option value="o1-mini">o1-mini</option>
             <option value="gpt-4-turbo">GPT-4 Turbo</option>
             <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+            <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+            <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
+            <option value="claude-3-opus-20240229">Claude 3 Opus</option>
+            <option value="gemini-pro" disabled>Gemini Pro (Soon)</option>
           </select>
-          <button id="chat-clear-btn" style="padding: 4px 8px; border: 1px solid #c0c0c0; background: white; border-radius: 4px; cursor: pointer; font-size: 12px;">🗑️</button>
+          
+          <!-- Thread Management Buttons -->
+          <div style="display: flex; gap: 4px;">
+            <button id="thread-history-btn" style="
+              background: none;
+              border: 1px solid #c0c0c0;
+              font-size: 14px;
+              cursor: pointer;
+              color: #666;
+              padding: 6px 8px;
+              border-radius: 4px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+            " title="Chat History">🕐</button>
+            <button id="new-thread-btn" style="
+              background: #007acc;
+              color: white;
+              border: none;
+              padding: 6px 10px;
+              border-radius: 4px;
+              font-size: 16px;
+              cursor: pointer;
+              font-weight: bold;
+              line-height: 1;
+            " title="New conversation">+</button>
+            <button id="clear-debug-btn" style="
+              background: #dc3545;
+              color: white;
+              border: none;
+              padding: 6px 8px;
+              border-radius: 4px;
+              font-size: 12px;
+              cursor: pointer;
+            " title="Clear all conversations (debug)">🧹</button>
+            <button id="chat-clear-btn" style="
+              background: white;
+              border: 1px solid #c0c0c0;
+              padding: 6px 8px;
+              border-radius: 4px;
+              cursor: pointer;
+              font-size: 12px;
+              color: #666;
+            " title="Clear current chat">🗑️</button>
+          </div>
         </div>
       </div>
     `;
@@ -122,17 +183,7 @@ export class ChatManager {
       this.hide();
     });
 
-    // Add provider change listener to update models
-    const providerSelect = this._dialogElement.querySelector(
-      '#chat-provider'
-    ) as HTMLSelectElement;
-    const modelSelect = this._dialogElement.querySelector(
-      '#chat-model'
-    ) as HTMLSelectElement;
-
-    providerSelect?.addEventListener('change', () => {
-      this._updateModelsForProvider(providerSelect.value, modelSelect);
-    });
+    // Model selection is now handled below with auto-provider inference
 
     const sendBtn = this._dialogElement.querySelector(
       '#chat-send-btn'
@@ -162,9 +213,7 @@ export class ChatManager {
             !!this._dialogElement?.querySelector('#chat-messages')
           );
 
-          this._addMessageToDisplay('user', message);
-          console.log('🔥 User message added to display');
-
+          // Don't add user message immediately - it will come through the service
           // Send to service
           console.log('🔥 Calling chat service sendMessage');
           await this._chatService.sendMessage(message);
@@ -195,6 +244,47 @@ export class ChatManager {
       this._clearMessagesDisplay();
     });
 
+    // Thread selector event handlers
+    const threadHistoryBtn = this._dialogElement.querySelector('#thread-history-btn') as HTMLButtonElement;
+    const newThreadBtn = this._dialogElement.querySelector('#new-thread-btn') as HTMLButtonElement;
+    const clearDebugBtn = this._dialogElement.querySelector('#clear-debug-btn') as HTMLButtonElement;
+
+    threadHistoryBtn?.addEventListener('click', () => {
+      console.log('🔥 Thread history button clicked');
+      this._toggleThreadHistory();
+    });
+
+    newThreadBtn?.addEventListener('click', async () => {
+      console.log('🔥 New thread button clicked');
+      await this._createNewThread();
+    });
+
+    clearDebugBtn?.addEventListener('click', async () => {
+      console.log('🔥 Clear debug button clicked');
+      if (confirm('Clear all conversation history for this notebook? This cannot be undone.')) {
+        await this._clearAllConversations();
+      }
+    });
+
+    // Handle model selection and auto-infer provider
+    const modelSelect = this._dialogElement.querySelector('#chat-model') as HTMLSelectElement;
+    modelSelect?.addEventListener('change', () => {
+      const selectedModel = modelSelect.value;
+      const provider = getProviderForModel(selectedModel);
+      console.log(`🤖 Model changed to: ${selectedModel} (provider: ${provider})`);
+      
+      // Store the provider for use in requests (you can access it via modelSelect.dataset.provider)
+      modelSelect.dataset.provider = provider;
+    });
+
+    // Set initial provider for default model
+    if (modelSelect) {
+      const initialModel = modelSelect.value;
+      const initialProvider = getProviderForModel(initialModel);
+      modelSelect.dataset.provider = initialProvider;
+      console.log(`🤖 Initial model: ${initialModel} (provider: ${initialProvider})`);
+    }
+
     // Make dialog draggable
     const header = this._dialogElement.querySelector(
       '#chat-header'
@@ -204,24 +294,40 @@ export class ChatManager {
     document.body.appendChild(this._dialogElement);
     console.log('🔥 Dialog appended to body');
 
-    // Listen for chat service messages
+    // Listen for chat service messages - NO DUPLICATE FILTERING
     this._chatService.messageAdded.connect((sender: any, message: any) => {
       console.log('🔥 Message received from service:', message);
-      if (message.role === 'assistant') {
-        // Dedup identical assistant text within 1s window (WS+HTTP safety net)
-        const now = Date.now();
-        if (
-          this._lastAssistantText &&
-          this._lastAssistantText.text === message.content &&
-          now - this._lastAssistantText.ts < 1000
-        ) {
-          console.log('�� Skipping duplicate assistant message');
-          return;
-        }
-        this._lastAssistantText = { text: message.content, ts: now };
-        this._addMessageToDisplay('assistant', message.content);
+      
+      // Handle special clear signal
+      if (message.metadata?.action === 'clear') {
+        console.log('🔥 Clearing chat UI for thread switch');
+        this._clearMessagesDisplay();
+        return;
+      }
+      
+      // Filter out status messages - only show real conversation messages
+      if (message.content && !message.content.startsWith('[status]') && !message.content.startsWith('⏳')) {
+        this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content);
+      } else {
+        console.log('🔥 Filtering out status message:', message.content.substring(0, 50));
       }
     });
+
+    // CRITICAL FIX: Display any messages that were loaded from history before the listener was connected
+    const existingMessages = this._chatService.getHistory();
+    console.log(`🔄 Displaying ${existingMessages.length} existing messages from history`);
+    for (const msg of existingMessages) {
+      // Filter out status messages from history too
+      if (msg.content && !msg.content.startsWith('[status]') && !msg.content.startsWith('⏳')) {
+        console.log(`🔄 Displaying history message: ${msg.role} - ${msg.content.substring(0, 100)}...`);
+        this._addMessageToDisplay(msg.role as 'user' | 'assistant', msg.content);
+      } else {
+        console.log(`🔄 Filtering out status message from history: ${msg.content.substring(0, 50)}...`);
+      }
+    }
+
+    // Load threads for the thread selector
+    await this._loadThreads();
   }
 
   private _addMessageToDisplay(
@@ -485,6 +591,173 @@ export class ChatManager {
     `;
   }
 
+  private async _loadThreads(): Promise<void> {
+    try {
+      console.log('🔄 Loading threads for thread selector');
+      if ((this._chatService as any).loadThreads) {
+        const threadsData = await (this._chatService as any).loadThreads();
+        this._availableThreads = threadsData.threads || [];
+        // Only set _currentThreadId from backend if we don't already have one set
+        if (!this._currentThreadId) {
+          this._currentThreadId = threadsData.selected_thread_id;
+        }
+        this._updateThreadList();
+        console.log(`✅ Loaded ${this._availableThreads.length} threads, selected: ${this._currentThreadId}`);
+      }
+    } catch (error) {
+      console.error('Error loading threads:', error);
+    }
+  }
+
+  private _updateThreadList(): void {
+    const threadList = this._dialogElement?.querySelector('#thread-list');
+    if (!threadList) return;
+
+    if (this._availableThreads.length === 0) {
+      threadList.innerHTML = '<div style="text-align: center; color: #666; padding: 16px;">No conversation history</div>';
+      return;
+    }
+
+    threadList.innerHTML = '';
+    
+    this._availableThreads.forEach(thread => {
+      const threadItem = document.createElement('div');
+      threadItem.style.cssText = `
+        padding: 8px 12px;
+        border-radius: 6px;
+        margin-bottom: 4px;
+        cursor: pointer;
+        border: 1px solid transparent;
+        ${thread.id === this._currentThreadId ? 'background: #e3f2fd; border-color: #2196f3;' : 'background: #f5f5f5;'}
+      `;
+      
+      threadItem.innerHTML = `
+        <div style="font-weight: 500; font-size: 13px; color: #333; margin-bottom: 2px;">
+          ${thread.title || 'Untitled'}
+        </div>
+        <div style="font-size: 11px; color: #666;">
+          ${thread.message_count} messages • ${this._formatDate(thread.last_updated)}
+        </div>
+      `;
+      
+      threadItem.addEventListener('click', async () => {
+        console.log('🔄 Switching to thread:', thread.id);
+        await this._switchToThread(thread.id);
+        this._hideThreadHistory();
+      });
+      
+      threadItem.addEventListener('mouseenter', () => {
+        if (thread.id !== this._currentThreadId) {
+          threadItem.style.background = '#e8e8e8';
+        }
+      });
+      
+      threadItem.addEventListener('mouseleave', () => {
+        if (thread.id !== this._currentThreadId) {
+          threadItem.style.background = '#f5f5f5';
+        }
+      });
+      
+      threadList.appendChild(threadItem);
+    });
+  }
+
+  private _toggleThreadHistory(): void {
+    const panel = this._dialogElement?.querySelector('#thread-history-panel') as HTMLElement;
+    if (!panel) return;
+
+    if (panel.style.display === 'none') {
+      this._showThreadHistory();
+    } else {
+      this._hideThreadHistory();
+    }
+  }
+
+  private _showThreadHistory(): void {
+    const panel = this._dialogElement?.querySelector('#thread-history-panel') as HTMLElement;
+    if (panel) {
+      panel.style.display = 'block';
+      this._updateThreadList();
+    }
+  }
+
+  private _hideThreadHistory(): void {
+    const panel = this._dialogElement?.querySelector('#thread-history-panel') as HTMLElement;
+    if (panel) {
+      panel.style.display = 'none';
+    }
+  }
+
+  private _formatDate(dateStr: string): string {
+    if (!dateStr) return 'Unknown';
+    try {
+      const date = new Date(dateStr);
+      const now = new Date();
+      const diffMs = now.getTime() - date.getTime();
+      const diffMins = Math.floor(diffMs / (1000 * 60));
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+      if (diffMins < 1) return 'Just now';
+      if (diffMins < 60) return `${diffMins}m ago`;
+      if (diffHours < 24) return `${diffHours}h ago`;
+      if (diffDays < 7) return `${diffDays}d ago`;
+      return date.toLocaleDateString();
+    } catch {
+      return 'Unknown';
+    }
+  }
+
+  private async _switchToThread(threadId: string): Promise<void> {
+    try {
+      console.log(`🔄 Switching from ${this._currentThreadId} to ${threadId}`);
+      this._currentThreadId = threadId;
+      
+      if ((this._chatService as any).switchThread) {
+        await (this._chatService as any).switchThread(threadId);
+        console.log('✅ Thread switched successfully');
+        
+        // Refresh thread list to show all available threads
+        await this._loadThreads();
+      }
+    } catch (error) {
+      console.error('Error switching thread:', error);
+    }
+  }
+
+  private async _createNewThread(): Promise<void> {
+    console.log('🔥 Creating new thread');
+    this._currentThreadId = null;
+    this._chatService.clearHistory();
+    this._clearMessagesDisplay();
+    this._hideThreadHistory();
+    
+    // Reload thread list from server but don't auto-select any thread
+    const threadsData = await (this._chatService as any).loadThreads();
+    this._availableThreads = threadsData.threads || [];
+    // Don't set _currentThreadId from threadsData.selected_thread_id - keep it null for new thread
+    this._updateThreadList();
+    console.log('🆕 New thread created, ready for fresh conversation');
+  }
+
+  private async _clearAllConversations(): Promise<void> {
+    try {
+      console.log('🧹 Clearing all conversations');
+      if ((this._chatService as any).clearAllConversations) {
+        await (this._chatService as any).clearAllConversations();
+        this._availableThreads = [];
+        this._currentThreadId = null;
+        this._chatService.clearHistory();
+        this._clearMessagesDisplay();
+        this._hideThreadHistory();
+        this._updateThreadList();
+        console.log('✅ All conversations cleared');
+      }
+    } catch (error) {
+      console.error('Error clearing conversations:', error);
+    }
+  }
+
   private _makeDraggable(dialog: HTMLDivElement, handle: HTMLDivElement): void {
     let isDragging = false;
     let startX = 0;
@@ -531,10 +804,10 @@ export class ChatManager {
     return this._isVisible;
   }
 
-  show(): void {
+  async show(): Promise<void> {
     console.log('🔥 ChatManager.show() called');
     this._isVisible = true;
-    this._createDialog();
+    await this._createDialog();
     if (this._dialogElement) {
       this._dialogElement.style.display = 'flex';
       console.log('🔥 Dialog should now be visible');
@@ -551,7 +824,7 @@ export class ChatManager {
     }
   }
 
-  toggle(): void {
+  async toggle(): Promise<void> {
     console.log(
       '🔥 ChatManager.toggle() called, current state:',
       this._isVisible
@@ -559,7 +832,7 @@ export class ChatManager {
     if (this._isVisible) {
       this.hide();
     } else {
-      this.show();
+      await this.show();
     }
   }
 
@@ -575,52 +848,5 @@ export class ChatManager {
     this._dialogElement = null;
   }
 
-  private _updateModelsForProvider(
-    provider: string,
-    modelSelect: HTMLSelectElement
-  ): void {
-    // Clear existing options
-    modelSelect.innerHTML = '';
 
-    let models: { value: string; label: string }[] = [];
-
-    switch (provider) {
-      case 'openai':
-        models = [
-          { value: 'gpt-4o', label: 'GPT-4o' },
-          { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-          { value: 'o1-preview', label: 'o1-preview' },
-          { value: 'o1-mini', label: 'o1-mini' },
-          { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
-          { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' }
-        ];
-        break;
-      case 'anthropic':
-        models = [
-          { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
-          { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
-          { value: 'claude-3-sonnet-20240229', label: 'Claude 3 Sonnet' },
-          { value: 'claude-3-haiku-20240307', label: 'Claude 3 Haiku' }
-        ];
-        break;
-      case 'google':
-        models = [
-          { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-          { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
-          { value: 'gemini-pro', label: 'Gemini Pro' }
-        ];
-        break;
-      default:
-        models = [{ value: 'gpt-4o', label: 'GPT-4o' }];
-    }
-
-    // Add options to select
-    models.forEach((model, index) => {
-      const option = document.createElement('option');
-      option.value = model.value;
-      option.textContent = model.label;
-      if (index === 0) option.selected = true; // Select first option by default
-      modelSelect.appendChild(option);
-    });
-  }
 }

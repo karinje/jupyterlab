@@ -170,20 +170,30 @@ const plugin: JupyterFrontEndPlugin<void> = {
           }
         }
 
-        // Open WS stream for the active notebook
+        // Open WS stream for the active notebook and load conversation history
         try {
           const path = cellManager.getActiveNotebookPath?.() || null;
           globalChatService.connectStream?.(path);
+          
+          // Load conversation history for the active notebook
+          if (path) {
+            await globalChatService.loadConversationHistory(path);
+          }
         } catch (e) {
           console.warn('WS connect on startup failed:', e);
         }
 
-        // Reconnect WS on notebook change (set once)
+        // Reconnect WS on notebook change and load conversation history (set once)
         if (!__w.__JLAB_CHAT_WATCH_BOUND) {
-          notebookTracker.currentChanged.connect(() => {
+          notebookTracker.currentChanged.connect(async () => {
             try {
               const newPath = cellManager.getActiveNotebookPath?.() || null;
               globalChatService?.connectStream?.(newPath);
+              
+              // Load conversation history for the new notebook
+              if (newPath && globalChatService?.loadConversationHistory) {
+                await globalChatService.loadConversationHistory(newPath);
+              }
             } catch (e) {
               console.warn('WS reconnect failed:', e);
             }
@@ -211,7 +221,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
       execute: async () => {
         console.log('🔥 Toggle chat command executed');
         const { chatManager } = await ensureChatService();
-        chatManager.toggle();
+        await chatManager.toggle();
       }
     });
 

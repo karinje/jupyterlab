@@ -241,6 +241,7 @@ def create_initial_state(
     conversation_history: List[Dict[str, str]] = None,
     model: str = "gpt-4o",
     provider: str = "openai",
+    thread_id: str = None,
 ) -> Dict[str, Any]:
     """Create initial state for new analysis"""
     if conversation_history is None:
@@ -264,6 +265,7 @@ def create_initial_state(
         "is_complete": False,
         "start_time": datetime.utcnow().isoformat(),
         "session_id": str(uuid.uuid4()),
+        "thread_id": thread_id,  # Add thread_id to state
     }
 
 

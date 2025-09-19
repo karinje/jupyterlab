@@ -41,6 +41,7 @@ class ChatHandler:
         self.server_url = server_url
         self.token = token
         self.default_notebook_path: Optional[str] = None
+        self.current_thread_id: Optional[str] = None  # Track current thread
 
     async def send_status(
         self,
@@ -100,7 +101,7 @@ class ChatHandler:
                         "timestamp": datetime.utcnow().isoformat(),
                         "notebook_path": notebook_path or self.default_notebook_path,
                         "tool_call_id": tool_call_id,
-                        "thread_id": thread_id,
+                        "thread_id": thread_id or self.current_thread_id,
                     },
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=5),
@@ -132,6 +133,36 @@ class ChatHandler:
         except Exception as e:
             logger.warning(f"Failed to display plan cards: {e}")
 
+    async def save_thread_title(
+        self,
+        title: str,
+        notebook_path: Optional[str] = None,
+        thread_id: Optional[str] = None,
+    ):
+        """Save thread title to conversation metadata"""
+        try:
+            import aiohttp
+
+            headers = {}
+            if self.token:
+                headers["Authorization"] = f"token {self.token}"
+
+            async with aiohttp.ClientSession() as session:
+                await session.post(
+                    f"{self.server_url}/api/chat/thread-title",
+                    json={
+                        "title": title,
+                        "notebook_path": notebook_path or self.default_notebook_path,
+                        "thread_id": thread_id,
+                        "timestamp": datetime.utcnow().isoformat(),
+                    },
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                )
+                logger.info(f"💾 Thread title saved: {title}")
+        except Exception as e:
+            logger.warning(f"Failed to save thread title: {e}")
+
 
 class DataAnalysisAgent:
     """
@@ -157,6 +188,7 @@ class DataAnalysisAgent:
         self.server_url = server_url
         self.token = token
         self.default_notebook_path = default_notebook_path
+        self.current_task = None  # Track current processing task for cancellation
 
         # Initialize components
         self.notebook_state_manager = NotebookStateManager(server_url, token)
@@ -528,6 +560,14 @@ class DataAnalysisAgent:
 
         logger.info(f"✅ Updated tools and workflow for notebook: {new_notebook_path}")
 
+    def cancel_current_task(self):
+        """Cancel the currently running task if any"""
+        if self.current_task and not self.current_task.done():
+            logger.info("🛑 Cancelling current agent task")
+            self.current_task.cancel()
+            return True
+        return False
+
     async def process_request(
         self,
         request: str,
@@ -536,6 +576,7 @@ class DataAnalysisAgent:
         model: str = "gpt-4o",
         provider: str = "openai",
         mcp_servers: Dict = None,
+        thread_id: str = None,
     ) -> str:
         """Process a user request through the LangGraph workflow"""
         try:
@@ -547,6 +588,7 @@ class DataAnalysisAgent:
             # Ensure chat messages (status/text) route to the current notebook over WS
             try:
                 self.chat_handler.default_notebook_path = notebook_path
+                self.chat_handler.current_thread_id = thread_id  # Set current thread for this request
             except Exception:
                 pass
             # Keep internal default in sync to avoid repeated updates on subsequent turns
@@ -554,7 +596,7 @@ class DataAnalysisAgent:
 
             # Create initial state
             initial_state = create_initial_state(
-                request, notebook_path, conversation_history, model, provider
+                request, notebook_path, conversation_history, model, provider, thread_id
             )
 
             # DEBUG: Check initial state creation
@@ -592,11 +634,16 @@ class DataAnalysisAgent:
                 "🤖 LangGraph agent starting analysis...", "info"
             )
 
-            # Run the workflow
+            # Run the workflow with cancellation support
             logger.info(
                 f"🚀 About to call workflow.ainvoke with state keys: {list(initial_state.keys())}"
             )
-            final_state = await self.workflow.ainvoke(initial_state)
+            task = asyncio.create_task(self.workflow.ainvoke(initial_state))
+            self.current_task = task
+            try:
+                final_state = await task
+            finally:
+                self.current_task = None
             logger.info(
                 f"�� Workflow completed with final state keys: {list(final_state.keys())}"
             )

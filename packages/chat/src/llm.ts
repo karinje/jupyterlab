@@ -1,5 +1,6 @@
 import { ILLMProvider, IMCPServersConfig } from './tokens';
 import { ServerConnection } from '@jupyterlab/services';
+import { getProviderForModel } from './models';
 
 /**
  * Base LLM Provider implementation
@@ -109,13 +110,22 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   /**
-   * Get selected provider from UI dropdown
+   * Get selected provider (auto-inferred from model selection)
    */
   private _getSelectedProvider(): string {
-    const providerSelect = document.querySelector(
-      '#chat-provider'
+    const modelSelect = document.querySelector(
+      '#chat-model'
     ) as HTMLSelectElement;
-    return providerSelect?.value || 'openai';
+    
+    // Get provider from dataset (set by model selection event handler)
+    const provider = modelSelect?.dataset?.provider;
+    if (provider) {
+      return provider;
+    }
+    
+    // Fallback: infer from current model using configuration
+    const selectedModel = this._getSelectedModel();
+    return getProviderForModel(selectedModel);
   }
 }
 

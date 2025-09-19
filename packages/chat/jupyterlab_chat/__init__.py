@@ -188,8 +188,7 @@ class ChatStreamHandler(tornado.websocket.WebSocketHandler):
 LANGGRAPH_AVAILABLE = True  # Always available since it's frontend TypeScript
 logger.info("🚀 LangGraph agent available (TypeScript frontend)")
 
-# Cold-start flag: clear chat history in notebook metadata on first request after restart
-BOOT_CLEAR_DONE = False
+# Removed BOOT_CLEAR_DONE - no need to clear chat history on restart
 
 # Import function_tool decorator for OpenAI Agents SDK
 try:
@@ -313,6 +312,28 @@ class ConversationManager:
             return self.serverapp.token
         return None
 
+    async def clear_all_conversations(self, notebook_path: str) -> bool:
+        """Clear all conversations for a notebook and save to disk"""
+        try:
+            logger.info(f"🧹 Clearing all conversations for notebook: {notebook_path}")
+            
+            # Create empty conversation structure
+            empty_conversations = {
+                "threads": {},
+                "active_thread": None,
+                "thread_order": []
+            }
+            
+            # Save empty structure to notebook (this will persist to disk)
+            await self._save_conversations_to_notebook(notebook_path, empty_conversations)
+            
+            logger.info(f"✅ Successfully cleared all conversations for {notebook_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error clearing conversations: {e}")
+            return False
+
     async def _save_conversations_to_notebook(
         self, notebook_path: str, conversations: Dict
     ):
@@ -385,7 +406,7 @@ class ChatStatusHandler(APIHandler):
                     msg_text = item.get("message") or item.get("content") or ""
                     notebook_path = item.get("notebook_path")
                     if not notebook_path:
-                        # Fallback to active session if single
+                        # Resolve notebook path from active sessions
                         import aiohttp
 
                         server_url = f"http://127.0.0.1:{self.serverapp.port}"
@@ -401,17 +422,12 @@ class ChatStatusHandler(APIHandler):
                                     data_sess = await resp.json()
                                     if isinstance(data_sess, dict):
                                         sessions = data_sess.get("sessions", [])
-                                        if (
-                                            isinstance(sessions, list)
-                                            and len(sessions) == 1
-                                        ):
+                                        if isinstance(sessions, list) and len(sessions) > 0:
                                             notebook_path = sessions[0].get("path")
                     if notebook_path and msg_text:
-                        conv = ConversationManager(self.serverapp)
-                        await conv.save_conversation_message(
-                            notebook_path,
-                            {"role": "assistant", "content": f"[status] {msg_text}"},
-                        )
+                        # Status messages should only be broadcast for real-time display,
+                        # NOT saved to conversation history (they were creating separate threads)
+                        logger.info(f"📊 Broadcasting status message: {msg_text} (not saving to conversation)")
                         # Broadcast live status event
                         try:
                             targets = []
@@ -471,8 +487,9 @@ class ChatMessageHandler(APIHandler):
                         continue
                     notebook_path = item.get("notebook_path")
                     message_text = item.get("content") or item.get("message") or ""
+                    thread_id = item.get("thread_id")  # Extract thread_id from request
                     if not notebook_path:
-                        # Fallback to active session if single
+                        # Resolve notebook path from active sessions
                         import aiohttp
 
                         server_url = f"http://127.0.0.1:{self.serverapp.port}"
@@ -486,10 +503,7 @@ class ChatMessageHandler(APIHandler):
                                     data_sess = await resp.json()
                                     if isinstance(data_sess, dict):
                                         sessions = data_sess.get("sessions", [])
-                                        if (
-                                            isinstance(sessions, list)
-                                            and len(sessions) == 1
-                                        ):
+                                        if isinstance(sessions, list) and len(sessions) > 0:
                                             notebook_path = sessions[0].get("path")
                     if notebook_path and message_text:
                         # Save assistant message to YDoc metadata (fixed race condition)
@@ -497,6 +511,7 @@ class ChatMessageHandler(APIHandler):
                         await conv.save_conversation_message(
                             notebook_path,
                             {"role": "assistant", "content": message_text},
+                            thread_id,  # Pass thread_id to save to same thread as user message
                         )
 
                         # Broadcast live assistant message
@@ -536,6 +551,201 @@ class ChatMessageHandler(APIHandler):
             self.finish({"error": str(e)})
 
 
+class ChatThreadsHandler(APIHandler):
+    """Handler for getting conversation threads"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.conversation_manager = ConversationManager(self.serverapp)
+    
+    def check_xsrf_cookie(self):
+        """Disable XSRF check for this endpoint"""
+        pass
+    
+    @tornado.web.authenticated
+    async def get(self):
+        """Get conversation threads for a notebook with centralized thread selection logic"""
+        try:
+            notebook_path = self.get_argument('notebook_path', None)
+            if not notebook_path:
+                self.set_status(400)
+                self.finish({"error": "notebook_path parameter required"})
+                return
+            
+            conversations = await self.conversation_manager.load_conversation_history(notebook_path)
+            all_threads = conversations.get("threads", {})
+            
+            # Build thread summaries with centralized logic
+            thread_summaries = []
+            most_recent_thread_id = None
+            most_recent_time = 0
+            
+            for thread_id, thread_data in all_threads.items():
+                # Filter out status messages for accurate message count
+                messages = thread_data.get("messages", [])
+                conversation_messages = []
+                for msg in messages:
+                    content = msg.get("content", "")
+                    if content and not content.startswith("[status]") and not content.startswith("⏳"):
+                        conversation_messages.append(msg)
+                
+                # Get thread metadata
+                title = thread_data.get("title", "Untitled")
+                last_updated = thread_data.get("last_updated", thread_data.get("created", ""))
+                created = thread_data.get("created", "")
+                
+                # Calculate most recent thread
+                if last_updated:
+                    try:
+                        update_time = datetime.fromisoformat(last_updated.replace('Z', '+00:00')).timestamp()
+                        if update_time > most_recent_time:
+                            most_recent_time = update_time
+                            most_recent_thread_id = thread_id
+                    except Exception:
+                        pass
+                
+                thread_summaries.append({
+                    "id": thread_id,
+                    "title": title,
+                    "message_count": len(conversation_messages),
+                    "last_updated": last_updated,
+                    "created": created,
+                    "messages": conversation_messages  # Filtered messages for frontend
+                })
+            
+            # Sort threads by last_updated (most recent first)
+            thread_summaries.sort(key=lambda x: x.get("last_updated", ""), reverse=True)
+            
+            # Use most recent thread if no active thread specified
+            selected_thread_id = most_recent_thread_id or conversations.get("active_thread")
+            
+            response = {
+                "threads": thread_summaries,
+                "selected_thread_id": selected_thread_id,
+                "total_threads": len(thread_summaries)
+            }
+            
+            logger.info(f"📚 Returning {len(thread_summaries)} threads for {notebook_path}, selected: {selected_thread_id}")
+            self.finish(response)
+            
+        except Exception as e:
+            logger.error(f"Error getting conversation threads: {e}")
+            self.set_status(500)
+            self.finish({"error": str(e)})
+
+
+class ChatThreadTitleHandler(APIHandler):
+    """Handler for saving thread titles"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.conversation_manager = ConversationManager(self.serverapp)
+
+    def check_xsrf_cookie(self):
+        """Disable XSRF check for this endpoint"""
+        pass
+
+    @tornado.web.authenticated
+    async def post(self):
+        """Save thread title to conversation metadata"""
+        try:
+            body = self.get_json_body()
+            title = body.get("title")
+            notebook_path = body.get("notebook_path")
+            thread_id = body.get("thread_id")
+
+            if not title or not notebook_path:
+                self.set_status(400)
+                self.finish({"error": "title and notebook_path are required"})
+                return
+
+            logger.info(f"💾 Saving thread title: '{title}' for notebook: {notebook_path}, thread: {thread_id}")
+
+            # Load current conversations
+            conversations = await self.conversation_manager.load_conversation_history(notebook_path)
+            
+            # Find the thread to update (use most recent if no thread_id specified)
+            target_thread_id = thread_id
+            if not target_thread_id:
+                # Find most recent thread
+                all_threads = conversations.get("threads", {})
+                most_recent_time = 0
+                for tid, thread_data in all_threads.items():
+                    last_updated = thread_data.get("last_updated", "")
+                    if last_updated:
+                        try:
+                            update_time = datetime.fromisoformat(last_updated.replace('Z', '+00:00')).timestamp()
+                            if update_time > most_recent_time:
+                                most_recent_time = update_time
+                                target_thread_id = tid
+                        except Exception:
+                            pass
+
+            if target_thread_id and target_thread_id in conversations.get("threads", {}):
+                # Update thread title
+                conversations["threads"][target_thread_id]["title"] = title
+                conversations["threads"][target_thread_id]["last_updated"] = datetime.utcnow().isoformat()
+                
+                # Save updated conversations
+                await self.conversation_manager._save_conversations_to_notebook(notebook_path, conversations)
+                
+                logger.info(f"✅ Thread title saved: '{title}' for thread {target_thread_id}")
+                self.finish({"status": "success", "thread_id": target_thread_id, "title": title})
+            else:
+                logger.warning(f"Thread not found: {target_thread_id}")
+                self.set_status(404)
+                self.finish({"error": "Thread not found"})
+
+        except Exception as e:
+            logger.error(f"Error saving thread title: {e}")
+            self.set_status(500)
+            self.finish({"error": str(e)})
+
+
+class ChatDebugHandler(APIHandler):
+    """Handler for debug operations like clearing conversation history"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.conversation_manager = ConversationManager(self.serverapp)
+
+    def check_xsrf_cookie(self):
+        """Disable XSRF check for this endpoint"""
+        pass
+
+    @tornado.web.authenticated
+    async def post(self):
+        """Handle debug operations"""
+        try:
+            body = self.get_json_body()
+            action = body.get("action")
+            notebook_path = body.get("notebook_path")
+
+            if not action or not notebook_path:
+                self.set_status(400)
+                self.finish({"error": "action and notebook_path are required"})
+                return
+
+            if action == "clear_conversations":
+                success = await self.conversation_manager.clear_all_conversations(notebook_path)
+                
+                if success:
+                    self.finish({"status": "success", "message": f"Cleared conversations for {notebook_path}"})
+                else:
+                    self.set_status(500)
+                    self.finish({"error": "Failed to clear conversations"})
+            else:
+                self.set_status(400)
+                self.finish({"error": f"Unknown action: {action}"})
+
+        except Exception as e:
+            logger.error(f"Error in debug handler: {e}")
+            self.set_status(500)
+            self.finish({"error": str(e)})
+
+
+
+
 class ChatOpenAIHandler(APIHandler):
     """Handler for OpenAI chat requests with MCP server support"""
 
@@ -569,12 +779,12 @@ class ChatOpenAIHandler(APIHandler):
             provider = body.get("provider", "openai")
             mcp_servers_config = body.get("mcpServers", {})
             context = body.get("context", {})
-            notebook_path = context.get("notebook_path", "Untitled.ipynb")
-            logger.info(f"notebook_path (from context): {notebook_path}")
+            notebook_path = context.get("notebook_path")
+            logger.info(f"notebook_path (from frontend context): {notebook_path}")
             thread_id = body.get("thread_id")
 
-            # SERVER-SIDE FALLBACK: derive path from active sessions if needed
-            if not notebook_path or notebook_path == "Untitled.ipynb":
+            # TRUST FRONTEND: Only fall back to sessions if frontend sends null/empty
+            if not notebook_path:
                 try:
                     import aiohttp
 
@@ -588,67 +798,104 @@ class ChatOpenAIHandler(APIHandler):
                             if resp.status == 200:
                                 data = await resp.json()
                                 sessions = data.get("sessions", [])
-                                if len(sessions) == 1:
-                                    notebook_path = sessions[0].get(
-                                        "path", notebook_path
-                                    )
-                                    logger.info(f"🧭 Fallback notebook_path from sessions: {notebook_path}")
+                                if len(sessions) >= 1:
+                                    notebook_path = sessions[0].get("path")
+                                    logger.info(f"🧭 Fallback: resolved notebook_path from sessions: {notebook_path} (from {len(sessions)} sessions)")
                                 else:
-                                    logger.info(f"🧭 Fallback skipped; session count={len(sessions)}")
+                                    logger.warning("🧭 No active sessions found, using Untitled.ipynb as last resort")
+                                    notebook_path = "Untitled.ipynb"
                 except Exception as e:
-                    logger.warning(f"Fallback to sessions failed: {e}")
+                    logger.warning(f"Failed to resolve notebook path from sessions: {e}")
+                    notebook_path = "Untitled.ipynb"  # Only fallback to Untitled as last resort
 
-            # Cold start clearing: on the first request after server restart, clear chat history
-            global BOOT_CLEAR_DONE
-            if not BOOT_CLEAR_DONE and notebook_path:
-                try:
-                    logger.warning(f"❄️ Cold start: clearing chat_conversations for {notebook_path}")
-                    # Prime XSRF by loading once, then save empty conversations
-                    await self.conversation_manager.load_conversation_history(
-                        notebook_path
-                    )
-                    empty_conv = self.conversation_manager._create_empty_conversations()
-                    await self.conversation_manager._save_conversations_to_notebook(
-                        notebook_path, empty_conv
-                    )
-                    BOOT_CLEAR_DONE = True
-                except Exception as e:
-                    logger.warning(f"Cold start clear failed: {e}")
-
-            # Continue as before
+            # Removed cold start clearing - conversations should persist across restarts
             chat_mode = body.get("chat_mode", "auto")  # auto, langgraph, openai_agents
             parse_time = time.time() - parse_start
             logger.info(f"⚡ Request parsing took {parse_time:.3f}s")
             logger.info(f"🎯 USING MODEL: {model}, PROVIDER: {provider}, MODE: {chat_mode}")
             logger.debug(f"FULL REQUEST BODY: {json.dumps(body, indent=2)}")
-            logger.info(f"proceeding with notebook_path: {notebook_path}")
+            logger.info(f"🎯 FINAL notebook_path: {notebook_path} (frontend should provide active notebook, not random session)")
 
             # Load conversation history
             history_start = time.time()
             conversation_context = []
             active_thread_id = None
-            if BOOT_CLEAR_DONE:
-                conversations = (
-                    await self.conversation_manager.load_conversation_history(
-                        notebook_path
-                    )
+            # Always load conversation history (no more boot clearing)
+            conversations = (
+                await self.conversation_manager.load_conversation_history(
+                    notebook_path
                 )
-                active_thread_id = thread_id or conversations.get("active_thread")
-                if active_thread_id and active_thread_id in conversations.get(
-                    "threads", {}
-                ):
-                    thread_messages = conversations["threads"][active_thread_id].get(
-                        "messages", []
-                    )
-                    conversation_context = thread_messages[-10:]
+            )
+            
+            # Log all available threads for debugging
+            all_threads = conversations.get("threads", {})
+            thread_count = len(all_threads)
+            logger.info(f"📚 Found {thread_count} conversation threads in {notebook_path}")
+            
+            if thread_count > 0:
+                for tid, thread_data in all_threads.items():
+                    message_count = len(thread_data.get("messages", []))
+                    created = thread_data.get("created_at", "unknown")
+                    logger.info(f"  📝 Thread {tid[:8]}... has {message_count} messages (created: {created})")
+            
+            # Use selected thread ID from frontend context - respect explicit null for new threads
+            selected_thread_id = context.get("selected_thread_id")
+            all_threads = conversations.get("threads", {})
+            
+            # If specific thread selected, use it
+            if selected_thread_id and selected_thread_id in all_threads:
+                active_thread_id = selected_thread_id
+                logger.info(f"🎯 Using selected thread ID: {active_thread_id}")
+            # If frontend explicitly wants new thread (selected_thread_id is None), don't auto-select
+            elif "selected_thread_id" in context and context["selected_thread_id"] is None:
+                active_thread_id = None  # Force new thread creation
+                logger.info(f"🆕 Frontend requested new thread, not auto-selecting existing thread")
             else:
-                logger.warning("❄️ Cold start: skipping history load; starting with empty conversation_context")
-                BOOT_CLEAR_DONE = True
+                # Find most recent thread based on last_updated timestamp
+                most_recent_thread_id = suggested_thread_id
+                most_recent_time = 0
+                
+                for tid, thread_data in all_threads.items():
+                    last_updated = thread_data.get("last_updated")
+                    if last_updated:
+                        try:
+                            update_time = datetime.fromisoformat(last_updated.replace('Z', '+00:00')).timestamp()
+                            if update_time > most_recent_time:
+                                most_recent_time = update_time
+                                most_recent_thread_id = tid
+                        except Exception:
+                            pass
+                
+                active_thread_id = most_recent_thread_id
+                logger.info(f"🎯 Using most recent thread ID: {active_thread_id} (was suggested: {suggested_thread_id})")
+            
+            if active_thread_id and active_thread_id in conversations.get("threads", {}):
+                thread_messages = conversations["threads"][active_thread_id].get("messages", [])
+                
+                # Filter out status messages - only use real conversation messages for context
+                filtered_messages = []
+                for msg in thread_messages:
+                    content = msg.get("content", "")
+                    if content and not content.startswith("[status]") and not content.startswith("⏳"):
+                        filtered_messages.append(msg)
+                    else:
+                        logger.debug(f"Filtering out status message: {content[:50]}...")
+                
+                conversation_context = filtered_messages[-10:]
+                logger.info(f"✅ Loaded {len(thread_messages)} total messages, filtered to {len(filtered_messages)} conversation messages, using last {len(conversation_context)} for context")
+                
+                # Log first and last conversation messages for verification
+                if len(filtered_messages) > 0:
+                    first_msg = filtered_messages[0]
+                    last_msg = filtered_messages[-1]
+                    logger.info(f"  📖 First conversation message: {first_msg.get('role', 'unknown')} - {first_msg.get('content', '')[:100]}...")
+                    if len(filtered_messages) > 1:
+                        logger.info(f"  📖 Last conversation message: {last_msg.get('role', 'unknown')} - {last_msg.get('content', '')[:100]}...")
+            else:
+                logger.info(f"❌ No active thread found or thread {active_thread_id} doesn't exist - starting fresh conversation")
 
             history_time = time.time() - history_start
-            logger.info(
-                f"⚡ History handling took {history_time:.3f}s (BOOT_CLEAR_DONE={BOOT_CLEAR_DONE})"
-            )
+            logger.info(f"⚡ History handling took {history_time:.3f}s")
 
             # Save user message to conversation history
             save_user_start = time.time()
@@ -661,18 +908,18 @@ class ChatOpenAIHandler(APIHandler):
             save_user_time = time.time() - save_user_start
             logger.info(f"⚡ User message saving took {save_user_time:.3f}s")
 
-            # ALWAYS USE LANGGRAPH AGENT - NO FALLBACKS!
-            logger.info("🤖 ALWAYS USING LANGGRAPH AGENT")
-            # Force empty conversation_context for now to avoid stale history
-            if conversation_context:
-                logger.warning(f"❄️ Forcing empty conversation_context (dropping {len(conversation_context)} messages)")
+            # ALWAYS USE LANGGRAPH AGENT - NO FILTERING, NO FALLBACKS!
+            logger.info("🤖 ALWAYS USING LANGGRAPH AGENT (no stupid filtering)")
+            # Pass conversation context to agent for continuity
+            logger.info(f"📚 Passing {len(conversation_context)} messages as conversation context")
             response = await self._run_langgraph_agent(
                 message,
                 notebook_path,
-                [],  # FORCE COLD CONTEXT
+                conversation_context,  # Pass actual conversation context
                 model,
                 mcp_servers_config,
                 provider,
+                active_thread_id,  # Pass thread_id to agent
             )
 
             # Note: Assistant message is already saved by RespondToUser tool via ChatMessageHandler
@@ -700,36 +947,8 @@ class ChatOpenAIHandler(APIHandler):
             self.set_status(500)
             self.write({"error": str(e)})
 
-    def _should_use_langgraph(self, message: str) -> bool:
-        """Determine if message should use LangGraph agent"""
-        # Use LangGraph for complex analysis tasks
-        analysis_keywords = [
-            "analyze",
-            "analysis",
-            "pattern",
-            "trend",
-            "correlation",
-            "visualize",
-            "plot",
-            "chart",
-            "graph",
-            "dashboard",
-            "explore",
-            "investigate",
-            "examine",
-            "study",
-            "compare",
-            "contrast",
-            "relationship",
-            "insight",
-            "data",
-            "dataset",
-            "statistics",
-            "metrics",
-        ]
-
-        message_lower = message.lower()
-        return any(keyword in message_lower for keyword in analysis_keywords)
+    # REMOVED: _should_use_langgraph - stupid filtering logic removed
+    # ALL messages go to LangGraph agent, no exceptions!
 
     def _get_server_token(self) -> str:
         """Get server token for authentication"""
@@ -910,6 +1129,7 @@ class ChatOpenAIHandler(APIHandler):
         model: str,
         mcp_servers_config: dict,
         provider: str = "openai",
+        thread_id: str = None,
     ) -> str:
         """Run LangGraph agent workflow"""
         try:
@@ -988,6 +1208,7 @@ class ChatOpenAIHandler(APIHandler):
                     model=model,
                     provider=provider,
                     mcp_servers=mcp_servers_config,
+                    thread_id=thread_id,  # Pass thread_id to agent
                 ),
                 timeout=300.0,  # 5 minute timeout
             )
@@ -1069,6 +1290,9 @@ class ChatExtension(ExtensionApp):
         """Initialize the extension's handlers"""
         handlers = [
             (r"/api/chat/openai", ChatOpenAIHandler),
+            (r"/api/chat/threads", ChatThreadsHandler),
+            (r"/api/chat/thread-title", ChatThreadTitleHandler),
+            (r"/api/chat/debug", ChatDebugHandler),
         ]
         self.handlers.extend(handlers)
 
@@ -1085,6 +1309,9 @@ def _load_jupyter_server_extension(server_app):
         (r"/api/chat/status", ChatStatusHandler),
         (r"/api/chat/message", ChatMessageHandler),
         (r"/api/chat/stream", ChatStreamHandler),
+        (r"/api/chat/threads", ChatThreadsHandler),
+        (r"/api/chat/thread-title", ChatThreadTitleHandler),
+        (r"/api/chat/debug", ChatDebugHandler),
     ]
     server_app.web_app.add_handlers(".*$", handlers)
     server_app.log.info("JupyterLab Chat extension loaded with status endpoints")
