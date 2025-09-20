@@ -188,14 +188,36 @@ const plugin: JupyterFrontEndPlugin<void> = {
           notebookTracker.currentChanged.connect(async () => {
             try {
               const newPath = cellManager.getActiveNotebookPath?.() || null;
-              globalChatService?.connectStream?.(newPath);
+              console.log('🔥 [Extension] Notebook changed to:', newPath);
               
-              // Load conversation history for the new notebook
-              if (newPath && globalChatService?.loadConversationHistory) {
-                await globalChatService.loadConversationHistory(newPath);
+              if (newPath) {
+                // Enhanced notebook switching with UI clearing
+                console.log('🔥 [Extension] Starting enhanced notebook switch process...');
+                
+                // First, reconnect WebSocket to new notebook
+                globalChatService?.connectStream?.(newPath);
+                
+                // Then load conversation history with UI clearing
+                if (globalChatService?.loadConversationHistory) {
+                  console.log('🔥 [Extension] Calling loadConversationHistory with clearUI=true');
+                  await globalChatService.loadConversationHistory(newPath, true); // clearUI = true
+                }
+                
+                console.log('🔥 [Extension] Enhanced notebook switch completed for:', newPath);
+              } else {
+                console.log('🔥 [Extension] No active notebook path detected');
+                // Still try to reconnect WebSocket
+                globalChatService?.connectStream?.(null);
               }
             } catch (e) {
-              console.warn('WS reconnect failed:', e);
+              console.warn('🔥 [Extension] Enhanced notebook switch failed:', e);
+              // Fallback to basic reconnection
+              try {
+                const fallbackPath = cellManager.getActiveNotebookPath?.() || null;
+                globalChatService?.connectStream?.(fallbackPath);
+              } catch (fallbackError) {
+                console.warn('🔥 [Extension] Fallback WS reconnect also failed:', fallbackError);
+              }
             }
           });
           __w.__JLAB_CHAT_WATCH_BOUND = true;

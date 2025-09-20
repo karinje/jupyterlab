@@ -119,9 +119,14 @@ export class ChatService implements IChatService {
   /**
    * Load conversation history from server for current notebook
    */
-    async loadConversationHistory(notebookPath: string): Promise<void> {
+    async loadConversationHistory(notebookPath: string, clearUI: boolean = false): Promise<void> {
     try {
-      console.log('🔄 Loading conversation history for:', notebookPath);
+      console.log('🔄 Loading conversation history for:', notebookPath, clearUI ? '(with UI clear)' : '');
+
+      // If this is a notebook switch, clear the UI first
+      if (clearUI) {
+        await this.clearUIForNotebookSwitch(notebookPath);
+      }
 
       const settings = ServerConnection.makeSettings();
       const requestUrl = new URL('/api/chat/threads', settings.baseUrl).href;
@@ -207,13 +212,55 @@ export class ChatService implements IChatService {
     }
   }
 
+  /**
+   * Clear UI and show switching message for notebook transitions
+   */
+  async clearUIForNotebookSwitch(notebookPath: string): Promise<void> {
+    console.log('🔄 Clearing UI for notebook switch to:', notebookPath);
+    
+    // Cancel any current request before switching
+    await this._cancelCurrentRequest();
+    
+    // Clear current messages completely
+    this._messages = [];
+    
+    // Emit a special signal to clear the UI first
+    this._messageAdded.emit({
+      id: 'CLEAR_MESSAGES',
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+      metadata: { action: 'clear' }
+    });
+
+    // Show switching message
+    const notebookName = notebookPath.split('/').pop() || notebookPath;
+    this._messageAdded.emit({
+      id: 'NOTEBOOK_SWITCH',
+      role: 'assistant', 
+      content: `🔄 Switching to notebook: ${notebookName}...`,
+      timestamp: new Date(),
+      metadata: { 
+        action: 'notebook_switch',
+        notebookPath: notebookPath,
+        temporary: true 
+      }
+    });
+
+    // Reset selected thread for new notebook
+    this._selectedThreadId = null;
+  }
+
   async loadThreads(): Promise<any> {
     try {
       const notebookPath = this._cellManager.getActiveNotebookPath?.() || 'Untitled.ipynb';
-      console.log('🔄 Loading threads for:', notebookPath);
+      console.log('🔍 [loadThreads] Loading threads for:', notebookPath);
+      console.log('🔍 [loadThreads] CellManager method exists:', !!this._cellManager.getActiveNotebookPath);
 
       const settings = ServerConnection.makeSettings();
       const requestUrl = new URL('/api/chat/threads', settings.baseUrl).href;
+
+      console.log('🔍 [loadThreads] Making request to:', `${requestUrl}?notebook_path=${encodeURIComponent(notebookPath)}`);
 
       const response = await ServerConnection.makeRequest(
         `${requestUrl}?notebook_path=${encodeURIComponent(notebookPath)}`,
@@ -229,7 +276,8 @@ export class ChatService implements IChatService {
       }
 
       const data = await response.json();
-      console.log(`📚 Loaded ${data.threads?.length || 0} threads`);
+      console.log(`🔍 [loadThreads] Loaded ${data.threads?.length || 0} threads for ${notebookPath}`);
+      console.log('🔍 [loadThreads] Thread data:', data);
       return data;
     } catch (error) {
       console.error('Error loading threads:', error);

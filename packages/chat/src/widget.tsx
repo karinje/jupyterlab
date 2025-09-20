@@ -240,11 +240,11 @@ export class ChatManager {
     const newThreadBtn = this._dialogElement.querySelector('#new-thread-btn') as HTMLButtonElement;
     const clearDebugBtn = this._dialogElement.querySelector('#clear-debug-btn') as HTMLButtonElement;
 
-    threadHistoryBtn?.addEventListener('click', (event) => {
+    threadHistoryBtn?.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
       console.log('🔥 Thread history button clicked');
-      this._toggleThreadHistory();
+      await this._toggleThreadHistory();
     });
 
     newThreadBtn?.addEventListener('click', async () => {
@@ -313,6 +313,33 @@ export class ChatManager {
       if (message.metadata?.action === 'clear') {
         console.log('🔥 Clearing chat UI for thread switch');
         this._clearMessagesDisplay();
+        return;
+      }
+      
+      // Handle notebook switch message
+      if (message.metadata?.action === 'notebook_switch') {
+        console.log('🔥 Handling notebook switch message:', message.content);
+        this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp);
+        
+        // After a short delay, update connection info and remove the temporary message
+        setTimeout(async () => {
+          try {
+            // Remove the temporary switching message
+            const messagesContainer = this._dialogElement?.querySelector('#chat-messages');
+            if (messagesContainer) {
+              const lastMessage = messagesContainer.lastElementChild;
+              if (lastMessage && lastMessage.textContent?.includes('🔄 Switching to notebook:')) {
+                lastMessage.remove();
+              }
+            }
+            
+            // Show updated connection info for new notebook
+            await this._showConnectionInfo();
+          } catch (error) {
+            console.warn('Error updating connection info after notebook switch:', error);
+          }
+        }, 1500); // 1.5 second delay to show switching message
+        
         return;
       }
       
@@ -720,22 +747,25 @@ export class ChatManager {
     });
   }
 
-  private _toggleThreadHistory(): void {
+  private async _toggleThreadHistory(): Promise<void> {
     const panel = this._dialogElement?.querySelector('#thread-history-panel') as HTMLElement;
     if (!panel) return;
 
     if (panel.style.display === 'none') {
-      this._showThreadHistory();
+      await this._showThreadHistory();
     } else {
       this._hideThreadHistory();
     }
   }
 
-  private _showThreadHistory(): void {
+  private async _showThreadHistory(): Promise<void> {
     const panel = this._dialogElement?.querySelector('#thread-history-panel') as HTMLElement;
     if (panel) {
       panel.style.display = 'block';
-      this._updateThreadList();
+      
+      // CRITICAL FIX: Load fresh thread data for current notebook before showing list
+      console.log('🔄 Loading fresh thread data for current notebook...');
+      await this._loadThreads();
     }
   }
 

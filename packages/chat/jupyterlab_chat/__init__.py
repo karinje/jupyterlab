@@ -907,7 +907,7 @@ class ChatOpenAIHandler(APIHandler):
                 logger.info(f"🆕 Frontend requested new thread, not auto-selecting existing thread")
             else:
                 # Find most recent thread based on last_updated timestamp
-                most_recent_thread_id = suggested_thread_id
+                most_recent_thread_id = conversations.get("active_thread")
                 most_recent_time = 0
                 
                 for tid, thread_data in all_threads.items():
@@ -922,7 +922,7 @@ class ChatOpenAIHandler(APIHandler):
                             pass
                 
                 active_thread_id = most_recent_thread_id
-                logger.info(f"🎯 Using most recent thread ID: {active_thread_id} (was suggested: {suggested_thread_id})")
+                logger.info(f"🎯 Using most recent thread ID: {active_thread_id} (was suggested: {conversations.get('active_thread')})")
             
             if active_thread_id and active_thread_id in conversations.get("threads", {}):
                 thread_messages = conversations["threads"][active_thread_id].get("messages", [])

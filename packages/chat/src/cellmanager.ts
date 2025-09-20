@@ -47,20 +47,20 @@ export class CellManager implements ICellManager {
    */
   getActiveNotebookPath(): string | null {
     const panel = this._notebookTracker.currentWidget as any;
-    console.log('[CellManager] getActiveNotebookPath called');
-    console.log('[CellManager] currentWidget:', panel);
-    console.log('[CellManager] panel.context:', panel?.context);
-    console.log('[CellManager] panel.context.path:', panel?.context?.path);
+    console.log('🔍 [CellManager] getActiveNotebookPath called');
+    console.log('🔍 [CellManager] currentWidget:', panel);
+    console.log('🔍 [CellManager] panel.context:', panel?.context);
+    console.log('🔍 [CellManager] panel.context.path:', panel?.context?.path);
     const currentPath = (panel && panel.context && panel.context.path) || null;
-    console.log('[CellManager] resolved currentPath:', currentPath);
+    console.log('🔍 [CellManager] resolved currentPath:', currentPath);
     const lastPath = (this as any)._lastNotebookPath;
-    console.log('[CellManager] lastNotebookPath:', lastPath);
+    console.log('🔍 [CellManager] lastNotebookPath:', lastPath);
     // Update cache if we have a current path
     if (currentPath) {
       this._lastNotebookPath = currentPath;
     }
     const result = currentPath || this._lastNotebookPath;
-    console.log('[CellManager] final result:', result);
+    console.log('🔍 [CellManager] final result:', result);
     return result;
   }
 
