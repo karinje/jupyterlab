@@ -40,6 +40,84 @@
   transform-origin: center;
 }
 
+.jp-ChatDialog-resizing {
+  box-shadow: 0 16px 64px rgba(0, 0, 0, 0.25);
+  user-select: none;
+}
+
+/* Resize Handles - Invisible but cover entire borders like normal apps */
+.resize-handle {
+  position: absolute;
+  background: transparent;
+  transition: none;
+}
+
+/* Edge handles cover entire borders */
+.resize-handle-n {
+  top: -4px;
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: n-resize;
+}
+
+.resize-handle-s {
+  bottom: -4px;
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: s-resize;
+}
+
+.resize-handle-e {
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: e-resize;
+}
+
+.resize-handle-w {
+  top: 0;
+  left: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: w-resize;
+}
+
+/* Corner handles for diagonal resizing */
+.resize-handle-ne {
+  top: -4px;
+  right: -4px;
+  width: 12px;
+  height: 12px;
+  cursor: ne-resize;
+}
+
+.resize-handle-nw {
+  top: -4px;
+  left: -4px;
+  width: 12px;
+  height: 12px;
+  cursor: nw-resize;
+}
+
+.resize-handle-se {
+  bottom: -4px;
+  right: -4px;
+  width: 12px;
+  height: 12px;
+  cursor: se-resize;
+}
+
+.resize-handle-sw {
+  bottom: -4px;
+  left: -4px;
+  width: 12px;
+  height: 12px;
+  cursor: sw-resize;
+}
+
 /* Dialog Header */
 .jp-ChatDialog-header {
   display: flex;
@@ -87,10 +165,9 @@
   flex: 1;
   overflow-y: auto;
   padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  background: var(--jp-layout-color0, #fff);
+  background: #fafafa;
+  width: 100%; /* Ensure full width usage */
+  box-sizing: border-box; /* Include padding in width calculation */
 }
 
 .jp-ChatDialog-messages::-webkit-scrollbar {
@@ -181,7 +258,7 @@
 
 .jp-ChatDialog-message-content {
   flex: 1;
-  max-width: calc(100% - 40px);
+  min-width: 0; /* Allow flex item to shrink below content size */
 }
 
 .jp-ChatDialog-message-text {
@@ -193,6 +270,8 @@
   color: var(--jp-ui-font-color1, #333);
   word-wrap: break-word;
   white-space: pre-wrap;
+  width: 100%; /* Use full available width */
+  box-sizing: border-box; /* Include padding in width calculation */
 }
 
 .jp-ChatDialog-message-user .jp-ChatDialog-message-text {

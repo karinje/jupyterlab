@@ -70,6 +70,15 @@ export class ChatManager {
         <button id="chat-close-btn" style="border: none; background: none; font-size: 18px; cursor: pointer; color: #666;">✕</button>
       </div>
       
+      <!-- Resize handles - invisible, cover entire borders like normal apps -->
+      <div class="resize-handle resize-handle-n"></div>
+      <div class="resize-handle resize-handle-s"></div>
+      <div class="resize-handle resize-handle-e"></div>
+      <div class="resize-handle resize-handle-w"></div>
+      <div class="resize-handle resize-handle-ne"></div>
+      <div class="resize-handle resize-handle-nw"></div>
+      <div class="resize-handle resize-handle-se"></div>
+      <div class="resize-handle resize-handle-sw"></div>
 
       
       <div id="thread-history-panel" style="
@@ -84,7 +93,7 @@ export class ChatManager {
         </div>
       </div>
 
-             <div id="chat-messages" style="flex: 1; padding: 16px; overflow-y: auto; background: #fafafa;">
+             <div id="chat-messages" class="jp-ChatDialog-messages">
        </div>
 
       <div style="padding: 16px; border-top: 1px solid #e0e0e0;">
@@ -275,6 +284,9 @@ export class ChatManager {
     ) as HTMLDivElement;
     this._makeDraggable(this._dialogElement, header);
 
+    // Make dialog resizable
+    this._makeResizable(this._dialogElement);
+
     document.body.appendChild(this._dialogElement);
     console.log('🔥 Dialog appended to body');
 
@@ -356,9 +368,6 @@ export class ChatManager {
     // No welcome section to remove anymore
 
     const messageDiv = document.createElement('div');
-    messageDiv.style.cssText = `
-      margin-bottom: 12px;
-    `;
 
     const isUser = role === 'user';
 
@@ -380,20 +389,19 @@ export class ChatManager {
         </div>
       `;
     } else {
-      // Render regular message
+      // Render regular message - keep original simple layout but without width constraints
+      messageDiv.style.marginBottom = '12px';
       messageDiv.innerHTML = `
-        <div style="flex: 1;">
-          <div style="background: ${isUser ? '#007acc' : '#f5f5f5'}; color: ${
-            isUser ? 'white' : '#333'
-          }; padding: 8px 12px; border-radius: 8px; font-size: 14px; word-wrap: break-word; max-width: 280px;">
-            ${content.replace(/\n/g, '<br>')}
-          </div>
-          <div style="font-size: 11px; color: #666; margin-top: 4px;">
-            ${(timestamp || new Date()).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit'
-            })}
-          </div>
+        <div style="background: ${isUser ? '#007acc' : '#f5f5f5'}; color: ${
+          isUser ? 'white' : '#333'
+        }; padding: 8px 12px; border-radius: 8px; font-size: 14px; word-wrap: break-word; display: inline-block; max-width: 85%;">
+          ${content.replace(/\n/g, '<br>')}
+        </div>
+        <div style="font-size: 11px; color: #666; margin-top: 4px;">
+          ${(timestamp || new Date()).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit'
+          })}
         </div>
       `;
     }
@@ -852,6 +860,114 @@ export class ChatManager {
         console.log('🔥 Drag ended');
       }
       isDragging = false;
+    });
+  }
+
+  private _makeResizable(dialog: HTMLDivElement): void {
+    let isResizing = false;
+    let resizeDirection = '';
+    let startX = 0;
+    let startY = 0;
+    let startWidth = 0;
+    let startHeight = 0;
+    let startLeft = 0;
+    let startTop = 0;
+
+    const minWidth = 300;
+    const minHeight = 400;
+
+    // Add event listeners to all resize handles
+    const resizeHandles = dialog.querySelectorAll('.resize-handle');
+    
+    resizeHandles.forEach(handle => {
+      handle.addEventListener('mousedown', (e: Event) => {
+        const mouseEvent = e as MouseEvent;
+        isResizing = true;
+        resizeDirection = (handle as HTMLElement).className.split(' ')[1]; // Get direction class
+        
+        startX = mouseEvent.clientX;
+        startY = mouseEvent.clientY;
+        
+        const rect = dialog.getBoundingClientRect();
+        startWidth = rect.width;
+        startHeight = rect.height;
+        startLeft = rect.left;
+        startTop = rect.top;
+        
+        mouseEvent.preventDefault();
+        mouseEvent.stopPropagation();
+        console.log('🔥 Resize started:', resizeDirection);
+        
+        // Add resizing class for visual feedback
+        dialog.classList.add('jp-ChatDialog-resizing');
+      });
+    });
+
+    document.addEventListener('mousemove', (e: MouseEvent) => {
+      if (!isResizing) return;
+
+      const deltaX = e.clientX - startX;
+      const deltaY = e.clientY - startY;
+
+      let newWidth = startWidth;
+      let newHeight = startHeight;
+      let newLeft = startLeft;
+      let newTop = startTop;
+
+      // Handle different resize directions
+      switch (resizeDirection) {
+        case 'resize-handle-e': // East (right)
+          newWidth = Math.max(minWidth, startWidth + deltaX);
+          break;
+        case 'resize-handle-w': // West (left)
+          newWidth = Math.max(minWidth, startWidth - deltaX);
+          newLeft = startLeft + (startWidth - newWidth);
+          break;
+        case 'resize-handle-s': // South (bottom)
+          newHeight = Math.max(minHeight, startHeight + deltaY);
+          break;
+        case 'resize-handle-n': // North (top)
+          newHeight = Math.max(minHeight, startHeight - deltaY);
+          newTop = startTop + (startHeight - newHeight);
+          break;
+        case 'resize-handle-se': // Southeast (bottom-right)
+          newWidth = Math.max(minWidth, startWidth + deltaX);
+          newHeight = Math.max(minHeight, startHeight + deltaY);
+          break;
+        case 'resize-handle-sw': // Southwest (bottom-left)
+          newWidth = Math.max(minWidth, startWidth - deltaX);
+          newHeight = Math.max(minHeight, startHeight + deltaY);
+          newLeft = startLeft + (startWidth - newWidth);
+          break;
+        case 'resize-handle-ne': // Northeast (top-right)
+          newWidth = Math.max(minWidth, startWidth + deltaX);
+          newHeight = Math.max(minHeight, startHeight - deltaY);
+          newTop = startTop + (startHeight - newHeight);
+          break;
+        case 'resize-handle-nw': // Northwest (top-left)
+          newWidth = Math.max(minWidth, startWidth - deltaX);
+          newHeight = Math.max(minHeight, startHeight - deltaY);
+          newLeft = startLeft + (startWidth - newWidth);
+          newTop = startTop + (startHeight - newHeight);
+          break;
+      }
+
+      // Apply the new dimensions and position
+      dialog.style.width = newWidth + 'px';
+      dialog.style.height = newHeight + 'px';
+      dialog.style.left = newLeft + 'px';
+      dialog.style.top = newTop + 'px';
+      dialog.style.right = 'auto';
+      dialog.style.bottom = 'auto';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isResizing) {
+        console.log('🔥 Resize ended');
+        dialog.classList.remove('jp-ChatDialog-resizing');
+      }
+      isResizing = false;
+      resizeDirection = '';
     });
   }
 
