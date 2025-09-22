@@ -166,16 +166,16 @@ class ChatHandler:
             logger.warning(f"Failed to save thread title: {e}")
 
 
-class DataAnalysisAgent:
+class JupyterAgent:
     """
-    LangGraph-based agent for iterative data analysis
+    LangGraph-based agent for Jupyter notebook tasks
 
     Features:
     - Pure LLM-driven decision making
     - Dynamic planning with user interaction
     - Multi-step analysis with context awareness
     - Real-time status updates
-    - Multi-LLM suppor
+    - Multi-LLM support
     """
 
     def __init__(
@@ -326,7 +326,7 @@ class DataAnalysisAgent:
         self.workflow = self._build_graph()
 
         logger.info(
-            f"🤖 DataAnalysisAgent initialized with {len(original_tools)} tools (augmented schemas for binding)"
+            f"🤖 JupyterAgent initialized with {len(original_tools)} tools (augmented schemas for binding)"
         )
         
         # Store tool info for API access
@@ -703,6 +703,65 @@ class DataAnalysisAgent:
             await self.chat_handler.send_status(f"❌ Error: {e}", "error")
             return f"Error processing request: {e}"
 
+    def _create_system_instructions(self) -> str:
+        """Create system instructions without conversation history"""
+        return """You are a data analysis agent working in JupyterLab. Decide what to do next and EXPRESS your decision via TOOL CALLS ONLY.
+
+Tool-calling contract (STRICT):
+- Produce exactly ONE tool call per turn.
+- Include a short status_message in the tool args, summarizing the step you are about to perform.
+- Never emit plain-text answers unless you are explicitly using RespondToUser. If you intend to finish, call RespondToUser(intent="completion").
+If a single user request requires multiple actions, emit one tool at a time and rely on the next turn to continue. Do NOT emit multiple tools in a single turn.
+If you previously returned no tools, correct yourself by emitting exactly one valid tool call now.
+
+CONTRACT (per turn):
+- Call EXACTLY ONE tool from this set: Jupyter tools, Snowflake tools, RespondToUser, CreatePlan.
+- Use RespondToUser(intent="completion") when you are finished.
+- Always include a concise status_message in the tool args to communicate progress to the user.
+
+Example (format only):
+- Assistant tool_calls:
+  - insert_and_execute_cell(code="import matplotlib.pyplot as plt\\n...", cell_type="code", position="end", status_message="Insert new code cell to plot x vs x**2")
+
+Available payload tool categories:
+- Jupyter tools: insert_and_execute_cell, delete_cell, etc.
+- Snowflake tools: query_snowflake, list_snowflake_tables, get_table_schema, get_database_info
+- RespondToUser(message, intent?)
+- CreatePlan(plan_steps)
+
+Guidance:
+- Use Jupyter tools for Python code execution, plotting, data analysis, mathematical operations, and general notebook tasks. For requests like "plot x,y" or "create a chart", use insert_and_execute_cell with Python/matplotlib code.
+- ONLY use Snowflake tools when the user explicitly mentions Snowflake, databases, SQL queries, or external data sources. Do NOT use Snowflake tools for simple plotting or mathematical operations.
+- Use RespondToUser to talk to the user (clarifications, updates). For completion, call RespondToUser(intent="completion", thread_title="Brief descriptive title").
+- Use CreatePlan to present a multi-step plan (explicit plan_steps)."""
+
+    def _create_context_prompt(self, state: Dict[str, Any]) -> str:
+        """Create context prompt for LLM decision making (notebook state only, no conversation history)"""
+        notebook_summary = self._summarize_notebook(state.get("notebook_cells", []))
+
+        prompt = f"""Current Context:
+--------
+Notebook Context Guide:
+
+Cell Status:
+- ✅ Executed (#N) = Cell was run successfully (execution count N indicates order)
+- ✅ Executed (#N) with outputs = Cell produced results/plots/data
+- ⏸️ Not executed = Cell exists but hasn't been run yet
+
+Output Types:
+- "matplotlib_plot" = Chart/graph created
+- "svg_plot" = SVG graphics  
+- "dataframe_table" = Data table
+- "text" = Text output (may be truncated at 1000 chars)
+
+Current Notebook State:
+{notebook_summary}
+
+CRITICAL: Use the notebook state to understand what work has already been completed. If a task was interrupted (like plotting x,y through x,y**10), look at which cells are already executed and continue from where you left off. Don't restart from the beginning.
+
+Current Iteration: {state.get("current_iteration", 0)}"""
+        return prompt
+
     async def analyze_and_decide(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Core decision node - LLM analyzes context and decides next action via tool calls"""
         try:
@@ -741,28 +800,46 @@ class DataAnalysisAgent:
             if not llm:
                 raise ValueError(f"No LLM configured for provider: {provider}")
 
-            context_prompt = self._create_context_prompt(state)
+            # Create system message with instructions only (no conversation history)
+            system_instructions = self._create_system_instructions()
+            context_info = self._create_context_prompt(state)
+            system_message = {"role": "system", "content": f"{system_instructions}\n\n{context_info}"}
+
+            # Build complete message history with conversation history as actual messages
+            messages = [system_message]
+            
+            # Add ALL conversation history as actual message objects (not text in system prompt)
+            conversation_history = state.get("conversation_history", [])
+            if conversation_history:
+                logger.info(f"🧠 [analyze_and_decide] Including {len(conversation_history)} conversation messages as actual message objects")
+                messages.extend(conversation_history)  # ALL messages from thread
+            else:
+                logger.info("🧠 [analyze_and_decide] No conversation history to include")
+
+            # Note: Current user message is already included in conversation_history
+            # Don't add original_request separately - it's just the first message in the thread
+
             if "messages" not in state:
                 state["messages"] = []
 
-            system_message = {"role": "system", "content": context_prompt}
-            user_message = None
-            if state.get("original_request"):
-                user_message = {"role": "user", "content": state["original_request"]}
-            conversation_messages = (
-                [system_message]
-                + ([user_message] if user_message else [])
-                + state["messages"]
-            )
+            # Add any additional state messages (tool responses, etc.)
+            messages.extend(state["messages"])
 
-            logger.warning(
-                f"🧠 [analyze_and_decide] invoking LLM with messages={len(conversation_messages)} (system+{len(state['messages'])})"
+            logger.info(
+                f"🧠 [analyze_and_decide] Final message count: {len(messages)} (system=1, conversation={len(conversation_history)}, state={len(state['messages'])})"
             )
-            logger.warning(
-                f"conversation_messages={conversation_messages}\n"
-                f"state['messages']={state['messages']}"
-                f" bound_tools={getattr(llm, '_bound_tool_names', [])}"
-            )
+            
+            # Log message structure for debugging
+            for i, msg in enumerate(messages):
+                # Handle both dict messages and LangChain message objects
+                if hasattr(msg, 'type'):  # LangChain message object
+                    role = msg.type if hasattr(msg, 'type') else 'unknown'
+                    content_preview = str(msg.content)[:100] + "..." if len(str(msg.content)) > 100 else str(msg.content)
+                else:  # Dictionary message
+                    role = msg.get("role", "unknown")
+                    content_preview = msg.get("content", "")[:100] + "..." if len(msg.get("content", "")) > 100 else msg.get("content", "")
+                logger.debug(f"  Message {i}: {role} - {content_preview}")
+
             # Introspect the bound runnable to fetch the raw OpenAI tools payload, if available
             try:
                 raw_tools = []
@@ -790,17 +867,17 @@ class DataAnalysisAgent:
                 logger.warning(f"tool_schemas={detailed}")
             except Exception as _e:
                 logger.warning(f"tool introspection failed: {_e}")
-            tool_response = await llm.ainvoke(conversation_messages)
+            tool_response = await llm.ainvoke(messages)
 
             # Log tool_calls summary and details BEFORE any mutation
             tc = getattr(tool_response, "tool_calls", []) or []
             logger.warning(
-                f"🧠 [analyze_and_decide] LLM returned tool_calls={len(tc)} names={[c.get('name') for c in tc]}"
+                f"🧠 [analyze_and_decide] LLM returned tool_calls={len(tc)} names={[getattr(c, 'name', 'unknown') for c in tc]}"
             )
             for idx, c in enumerate(tc):
                 try:
                     logger.warning(
-                        f"🧠 [analyze_and_decide] tool[{idx}] id={c.get('id')} name={c.get('name')} args={c.get('args')}"
+                        f"🧠 [analyze_and_decide] tool[{idx}] id={getattr(c, 'id', 'unknown')} name={getattr(c, 'name', 'unknown')} args={getattr(c, 'args', {})}"
                     )
                 except Exception:
                     logger.warning(
@@ -832,58 +909,6 @@ class DataAnalysisAgent:
             state["next_action"] = "respond"
             state["reasoning"] = f"Error occurred: {e}"
             return state
-
-    def _create_context_prompt(self, state: Dict[str, Any]) -> str:
-        """Create context prompt for LLM decision making"""
-        notebook_summary = self._summarize_notebook(state.get("notebook_cells", []))
-        conversation_summary = self._format_conversation(
-            state.get("conversation_history", [])
-        )
-
-        prompt = f"""
- You are a data analysis agent working in JupyterLab. Decide what to do next and EXPRESS your decision via TOOL CALLS ONLY.
-
- Tool-calling contract (STRICT):
- - Produce exactly ONE tool call per turn.
- - Include a short status_message in the tool args, summarizing the step you are about to perform.
- - Never emit plain-text answers unless you are explicitly using RespondToUser. If you intend to finish, call RespondToUser(intent="completion").
- If a single user request requires multiple actions, emit one tool at a time and rely on the next turn to continue. Do NOT emit multiple tools in a single turn.
- If you previously returned no tools, correct yourself by emitting exactly one valid tool call now.
-
- CONTRACT (per turn):
- - Call EXACTLY ONE tool from this set: Jupyter tools, Snowflake tools, RespondToUser, CreatePlan.
- - Use RespondToUser(intent="completion") when you are finished.
- - Always include a concise status_message in the tool args to communicate progress to the user.
-
- Example (format only):
- - Assistant tool_calls:
-   - insert_and_execute_cell(code="import matplotlib.pyplot as plt\n...", cell_type="code", position="end", status_message="Insert new code cell to plot x vs x**2")
-
- Available payload tool categories:
- - Jupyter tools: insert_and_execute_cell, delete_cell, etc.
- - Snowflake tools: query_snowflake, list_snowflake_tables, get_table_schema, get_database_info
- - RespondToUser(message, intent?)
- - CreatePlan(plan_steps)
-
- Guidance:
- - Use Jupyter tools for notebook edits/execution.
- - Use Snowflake tools for external data queries.
- - Use RespondToUser to talk to the user (clarifications, updates). For completion, call RespondToUser(intent="completion", thread_title="Brief descriptive title").
- - Use CreatePlan to present a multi-step plan (explicit plan_steps).
-
- Contex
- --------
- User Request: {state["original_request"]}
-
- Current Notebook State:
- {notebook_summary}
-
- Conversation History:
- {conversation_summary}
-
- Current Iteration: {state.get("current_iteration", 0)}
-"""
-        return prompt
 
     async def create_plan(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Create analysis plan with interactive cards"""
@@ -955,70 +980,44 @@ class DataAnalysisAgent:
             state["reasoning"] = f"Error sending response: {e}"
             return state
 
-    async def complete_analysis(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Complete the analysis and provide summary"""
-        try:
-            logger.info("🏁 Completing analysis...")
 
-            # Generate summary
-            summary = self._generate_summary(state)
-
-            # Send final message
-            await self.chat_handler.send_message(f"## Analysis Complete\n\n{summary}")
-
-            state["is_complete"] = True
-            state["final_result"] = summary
-
-            await self.chat_handler.send_status("✅ Analysis completed successfully")
-            logger.info("🏁 Analysis completed")
-
-            return state
-
-        except Exception as e:
-            logger.error(f"❌ Error completing analysis: {e}")
-            state["reasoning"] = f"Error completing analysis: {e}"
-            return state
 
     def _summarize_notebook(self, notebook_cells: List[Dict]) -> str:
-        """Create a concise summary of notebook state"""
+        """Create complete summary of all code cells with execution status"""
         if not notebook_cells:
             return "Empty notebook"
 
         code_cells = [c for c in notebook_cells if c.get("type") == "code"]
-        markdown_cells = [c for c in notebook_cells if c.get("type") == "markdown"]
-        cells_with_output = [c for c in code_cells if c.get("outputs")]
+        
+        if not code_cells:
+            return "No code cells in notebook"
 
-        summary = f"Notebook has {len(notebook_cells)} cells ({len(code_cells)} code, {len(markdown_cells)} markdown)"
+        summary = "All Code Cells:\n"
+        
+        for i, cell in enumerate(code_cells):
+            source = cell.get("source", "").strip()
+            if not source:
+                continue
+                
+            # Check if cell was executed (has execution_count)
+            execution_count = cell.get("execution_count")
+            has_outputs = bool(cell.get("outputs"))
+            
+            if execution_count is not None:
+                status = f"✅ Executed (#{execution_count})"
+                if has_outputs:
+                    status += " with outputs"
+            else:
+                status = "⏸️ Not executed"
+            
+            summary += f"Cell {i+1}: {status}\n{source}\n\n"
 
-        if cells_with_output:
-            summary += f", {len(cells_with_output)} cells have outputs"
-
-        # Add recent code snippets
-        recent_code = []
-        for cell in code_cells[-3:]:  # Last 3 code cells
-            source = cell.get("source", "")
-            if source and len(source) < 200:
-                recent_code.append(f"- {source.strip()}")
-
-        if recent_code:
-            summary += "\n\nRecent code:\n" + "\n".join(recent_code)
-
+        # Debug: Log the actual notebook summary being sent to LLM
+        logger.info(f"📋 [_summarize_notebook] Summary for LLM: {summary[:500]}...")
+        
         return summary
 
-    def _format_conversation(self, conversation_history: List[Dict]) -> str:
-        """Format conversation history for context"""
-        if not conversation_history:
-            return "No previous conversation"
 
-        formatted = []
-        for msg in conversation_history[-5:]:  # Last 5 messages
-            role = msg.get("role", "unknown")
-            content = msg.get("content", "")
-            if len(content) > 100:
-                content = content[:100] + "..."
-            formatted.append(f"{role}: {content}")
-
-        return "\n".join(formatted)
 
     def _generate_summary(self, state: Dict[str, Any]) -> str:
         """Generate analysis summary"""
@@ -1028,11 +1027,18 @@ class DataAnalysisAgent:
         code_cells = len([c for c in notebook_cells if c.get("type") == "code"])
         iterations = state.get("current_iteration", 0)
 
+        # Get first user message from conversation history as the original request
+        first_user_message = "N/A"
+        for msg in conversation_history:
+            if msg.get("role") == "user":
+                first_user_message = msg.get("content", "N/A")[:100] + ("..." if len(msg.get("content", "")) > 100 else "")
+                break
+
         return f"""
 The data analysis session has been completed.
 
 **Summary:**
-- Original request: {state.get("original_request", "N/A")}
+- Initial request: {first_user_message}
 - Notebook cells created: {code_cells}
 - Analysis iterations: {iterations}
 - Conversation exchanges: {len(conversation_history)}

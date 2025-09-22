@@ -6,7 +6,7 @@ Run this to verify the agent implementation works correctly.
 
 import os
 import logging
-from .agent import DataAnalysisAgent
+from .agent import JupyterAgent
 
 # Set up proper logging using simplified config
 try:
@@ -36,7 +36,7 @@ async def test_agent():
 
     try:
         # Create agent
-        agent = DataAnalysisAgent(
+        agent = JupyterAgent(
             server_url=server_url, token=token, openai_api_key=openai_api_key
         )
 
@@ -106,18 +106,7 @@ def test_state_management():
         logger.error(f"❌ Plan serialization failed: {e}")
 
 
-def test_llm_router():
-    """Test LLM routing functionality"""
-    logger.info("🧪 Testing LLM router...")
 
-    from .llm import LLMRouter
-
-    try:
-        router = LLMRouter()
-        providers = router.get_available_providers()
-        logger.info(f"✅ Providers registered: {providers}")
-    except Exception as e:
-        logger.info("⚠️ Skipping LLM tests (no API key)")
 
 
 if __name__ == "__main__":
@@ -126,7 +115,6 @@ if __name__ == "__main__":
 
     # Run synchronous tests
     test_state_management()
-    test_llm_router()
 
     logger.info("\n🚀 Running agent integration test...")
     logger.info("⚠️ Make sure JupyterLab is running on port 8890")

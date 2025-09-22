@@ -12,7 +12,7 @@ from typing import Optional
 from jupyter_server.base.handlers import APIHandler
 import tornado.web
 
-from .agent import DataAnalysisAgent
+from .agent import JupyterAgent
 
 # Set up proper logging using simplified config
 try:
@@ -33,14 +33,14 @@ class LangGraphHandler(APIHandler):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._agent: Optional[DataAnalysisAgent] = None
+        self._agent: Optional[JupyterAgent] = None
 
     def check_xsrf_cookie(self):
         """Disable XSRF check for this endpoint"""
         pass
 
-    def get_agent(self) -> DataAnalysisAgent:
-        """Get or create DataAnalysisAgent instance"""
+    def get_agent(self) -> JupyterAgent:
+        """Get or create JupyterAgent instance"""
         if self._agent is None:
             # Get server configuration
             server_url = f"http://127.0.0.1:{self.serverapp.port}"
@@ -51,14 +51,14 @@ class LangGraphHandler(APIHandler):
             anthropic_api_key = self._get_anthropic_api_key()
 
             # Create agent
-            self._agent = DataAnalysisAgent(
+            self._agent = JupyterAgent(
                 server_url=server_url,
                 token=token,
                 openai_api_key=openai_api_key,
                 anthropic_api_key=anthropic_api_key,
             )
 
-            logger.info("🤖 Created new DataAnalysisAgent instance")
+            logger.info("🤖 Created new JupyterAgent instance")
 
         return self._agent
 

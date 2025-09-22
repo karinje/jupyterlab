@@ -27,6 +27,7 @@ export class ChatService implements IChatService {
   private _reconnectAttempts = 0;
   private _selectedThreadId: string | null = null;
   private _currentRequest: Promise<any> | null = null;  // Track current request for cancellation
+  private _currentAbortController: AbortController | null = null;  // For actual request cancellation
 
   constructor(llmProvider: ILLMProvider, cellManager: ICellManager) {
     console.log('ChatService constructor called');
@@ -54,6 +55,10 @@ export class ChatService implements IChatService {
   async sendMessage(message: string): Promise<void> {
     console.log('🚀 ChatService.sendMessage called with:', message);
 
+    // Cancel any current request before sending new message (ChatGPT-like behavior)
+    // Use 'interrupt' intent to preserve thread continuity
+    await this._cancelCurrentRequest('interrupt');
+
     // Add user message
     const userMessage: IChatMessage = {
       id: UUID.uuid4(),
@@ -70,16 +75,24 @@ export class ChatService implements IChatService {
       const context = this._buildContext();
 
       console.log('About to send to LLM...');
+      // Create abort controller for this request
+      this._currentAbortController = new AbortController();
+      
       // Send to LLM (track for cancellation)
-      this._currentRequest = this._llmProvider.sendMessage(message, context);
+      this._currentRequest = this._llmProvider.sendMessage(message, context, this._currentAbortController.signal);
       const response = await this._currentRequest;
       this._currentRequest = null;
+      this._currentAbortController = null;
       console.log('LLM response received:', response);
+
+      // Frontend manages all thread IDs - no need to extract from response
+      console.log('✅ Message sent successfully with thread ID:', this._selectedThreadId);
 
       // Do not add assistant message from HTTP response; rely solely on WS stream
       console.log('[CHAT] HTTP return ignored; waiting for WS broadcast');
     } catch (error) {
       this._currentRequest = null;
+      this._currentAbortController = null;
       
       if (error.name === 'AbortError') {
         console.log('🛑 Message request was cancelled');
@@ -101,11 +114,54 @@ export class ChatService implements IChatService {
     }
   }
 
-  private async _cancelCurrentRequest(): Promise<void> {
-    if (this._currentRequest) {
-      console.log('🛑 Cancelling current request');
-      // Note: This won't actually cancel HTTP requests, but will prevent processing
+  private async _cancelCurrentRequest(intent: 'interrupt' | 'switch' | 'notebook_switch' = 'interrupt', newThreadId?: string): Promise<void> {
+    console.log(`🛑 Cancelling current request with intent: ${intent}${newThreadId ? `, newThreadId: ${newThreadId}` : ''}`);
+    
+    if (this._currentRequest && this._currentAbortController) {
+      console.log('🛑 Aborting HTTP request');
+      // Actually abort the HTTP request
+      this._currentAbortController.abort();
       this._currentRequest = null;
+      this._currentAbortController = null;
+    }
+    
+    // Send cancellation signal to backend to stop agent execution
+    try {
+      console.log('🛑 Sending cancellation signal to backend');
+      const settings = ServerConnection.makeSettings();
+      const requestUrl = new URL('/api/chat/cancel', settings.baseUrl).href;
+      
+      await ServerConnection.makeRequest(
+        requestUrl,
+        {
+          method: 'POST',
+          body: JSON.stringify({}),
+        },
+        settings
+      );
+      console.log('✅ Cancellation signal sent successfully');
+    } catch (error) {
+      console.warn('⚠️ Failed to send cancellation signal:', error);
+      // Don't throw - cancellation should be best-effort
+    }
+    
+    // Handle thread ID based on intent
+    switch (intent) {
+      case 'interrupt':
+        // Keep existing _selectedThreadId to preserve conversation continuity
+        console.log(`📝 Preserving thread ID for interruption: ${this._selectedThreadId}`);
+        break;
+      case 'switch':
+        // Change to new thread ID for thread switching
+        if (newThreadId) {
+          console.log(`🔄 Switching thread ID from ${this._selectedThreadId} to ${newThreadId}`);
+          this._selectedThreadId = newThreadId;
+        }
+        break;
+      case 'notebook_switch':
+        // Thread ID will be handled separately in clearUIForNotebookSwitch
+        console.log(`📚 Notebook switch - thread ID will be loaded from new notebook metadata`);
+        break;
     }
   }
 
@@ -195,6 +251,10 @@ export class ChatService implements IChatService {
 
         console.log(`✅ Frontend: Successfully loaded ${threadMessages.length} messages into chat UI`);
 
+        // Set the thread ID for future messages
+        this._selectedThreadId = activeThreadId;
+        console.log(`🎯 Frontend: Set selected thread ID to: ${this._selectedThreadId}`);
+
         // Log first and last messages for verification
         if (threadMessages.length > 0) {
           const firstMsg = threadMessages[0];
@@ -205,7 +265,8 @@ export class ChatService implements IChatService {
           }
         }
       } else {
-        console.log('📝 Frontend: No active thread found, starting fresh conversation');
+        console.log('📝 Frontend: No active thread found, will create new thread on first message');
+        // Don't set _selectedThreadId here - let _buildContext() generate it when needed
       }
     } catch (error) {
       console.error('Error loading conversation history:', error);
@@ -218,8 +279,8 @@ export class ChatService implements IChatService {
   async clearUIForNotebookSwitch(notebookPath: string): Promise<void> {
     console.log('🔄 Clearing UI for notebook switch to:', notebookPath);
     
-    // Cancel any current request before switching
-    await this._cancelCurrentRequest();
+    // Cancel any current request before switching - use 'notebook_switch' intent
+    await this._cancelCurrentRequest('notebook_switch');
     
     // Clear current messages completely
     this._messages = [];
@@ -247,8 +308,38 @@ export class ChatService implements IChatService {
       }
     });
 
-    // Reset selected thread for new notebook
-    this._selectedThreadId = null;
+    // Load the active thread for the NEW notebook or create new thread ID
+    try {
+      const settings = ServerConnection.makeSettings();
+      const requestUrl = new URL('/api/chat/threads', settings.baseUrl).href;
+      
+      const response = await ServerConnection.makeRequest(
+        `${requestUrl}?notebook_path=${encodeURIComponent(notebookPath)}`,
+        { method: 'GET' },
+        settings
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        const activeThreadId = data.active_thread;
+        
+        if (activeThreadId) {
+          // Use existing active thread from new notebook
+          this._selectedThreadId = activeThreadId;
+          console.log(`📚 Switched to notebook ${notebookName}, using active thread: ${this._selectedThreadId}`);
+        } else {
+          // No threads in new notebook, create new thread ID
+          this._selectedThreadId = this._generateThreadId();
+          console.log(`📚 Switched to notebook ${notebookName}, created new thread: ${this._selectedThreadId}`);
+        }
+      } else {
+        console.warn('Failed to load threads for new notebook, creating new thread ID');
+        this._selectedThreadId = this._generateThreadId();
+      }
+    } catch (error) {
+      console.error('Error loading active thread for new notebook:', error);
+      this._selectedThreadId = this._generateThreadId();
+    }
   }
 
   async loadThreads(): Promise<any> {
@@ -289,8 +380,8 @@ export class ChatService implements IChatService {
     try {
       console.log('🔄 Switching to thread:', threadId);
       
-      // Cancel any current request before switching
-      await this._cancelCurrentRequest();
+      // Cancel any current request before switching - use 'switch' intent to change thread
+      await this._cancelCurrentRequest('switch', threadId);
       
       const notebookPath = this._cellManager.getActiveNotebookPath?.() || 'Untitled.ipynb';
       const settings = ServerConnection.makeSettings();
@@ -353,40 +444,7 @@ export class ChatService implements IChatService {
     }
   }
 
-  async clearAllConversations(): Promise<void> {
-    try {
-      const notebookPath = this._cellManager.getActiveNotebookPath?.() || 'Untitled.ipynb';
-      console.log('🧹 Clearing all conversations for:', notebookPath);
 
-      const settings = ServerConnection.makeSettings();
-      const requestUrl = new URL('/api/chat/debug', settings.baseUrl).href;
-
-      const response = await ServerConnection.makeRequest(
-        requestUrl,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            action: 'clear_conversations',
-            notebook_path: notebookPath
-          }),
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        },
-        settings
-      );
-
-      if (!response.ok) {
-        console.warn('Failed to clear conversations:', response.status);
-        return;
-      }
-
-      const data = await response.json();
-      console.log('✅ Conversations cleared:', data.message);
-    } catch (error) {
-      console.error('Error clearing conversations:', error);
-    }
-  }
 
   async getAvailableTools(): Promise<any> {
     try {
@@ -415,13 +473,126 @@ export class ChatService implements IChatService {
   }
 
   /**
-   * Clear chat history
+   * Generate a new thread ID
    */
-  clearHistory(): void {
-    this._messages = [];
-    this._selectedThreadId = null;  // Clear selected thread for new conversation
-    console.log('🧹 Cleared chat history and selected thread ID');
+  private _generateThreadId(): string {
+    return UUID.uuid4();
   }
+
+  /**
+   * Clear display only - keep same thread and metadata
+   */
+  clearDisplayOnly(): void {
+    this._messages = [];
+    console.log('🧹 Cleared display only, keeping thread ID:', this._selectedThreadId);
+  }
+
+  /**
+   * Create new thread - clear display and generate new thread ID
+   */
+  createNewThread(): void {
+    this._messages = [];
+    this._selectedThreadId = this._generateThreadId();
+    console.log('🆕 Created new thread ID:', this._selectedThreadId);
+  }
+
+  /**
+   * Clear current thread messages - keep same thread ID but clear all messages
+   */
+  async clearCurrentThread(): Promise<void> {
+    try {
+      const notebookPath = this._cellManager.getActiveNotebookPath?.() || 'Untitled.ipynb';
+      const currentThreadId = this._selectedThreadId;
+      
+      if (!currentThreadId) {
+        console.log('🧹 No current thread to clear, will create new thread on next message');
+        this._messages = [];
+        return;
+      }
+      
+      console.log('🧹 Clearing messages from current thread:', currentThreadId);
+
+      const settings = ServerConnection.makeSettings();
+      const requestUrl = new URL('/api/chat/conversations', settings.baseUrl).href;
+
+      const response = await ServerConnection.makeRequest(
+        requestUrl,
+        {
+          method: 'PUT',
+          body: JSON.stringify({
+            action: 'clear_messages',
+            notebook_path: notebookPath,
+            thread_id: currentThreadId
+          }),
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        },
+        settings
+      );
+
+      if (!response.ok) {
+        console.warn('Failed to clear thread messages:', response.status);
+        return;
+      }
+
+      const data = await response.json();
+      console.log('✅ Thread messages cleared:', data.message);
+      
+      // Clear UI but keep same thread ID
+      this._messages = [];
+      console.log('🧹 Cleared UI messages, keeping thread ID:', this._selectedThreadId);
+    } catch (error) {
+      console.error('Error clearing thread messages:', error);
+    }
+  }
+
+  /**
+   * Clear all conversations - delete all threads from metadata
+   */
+  async clearAllConversations(): Promise<void> {
+    try {
+      const notebookPath = this._cellManager.getActiveNotebookPath?.() || 'Untitled.ipynb';
+      console.log('🧹 Clearing all conversations for:', notebookPath);
+
+      const settings = ServerConnection.makeSettings();
+      const requestUrl = new URL('/api/chat/conversations', settings.baseUrl).href;
+
+      const response = await ServerConnection.makeRequest(
+        requestUrl,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'clear_all',
+            notebook_path: notebookPath
+          }),
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        },
+        settings
+      );
+
+      if (!response.ok) {
+        console.warn('Failed to clear conversations:', response.status);
+        return;
+      }
+
+      const data = await response.json();
+      console.log('✅ All conversations cleared:', data.message);
+      
+      // Clear UI and create new thread
+      this._messages = [];
+      this._selectedThreadId = this._generateThreadId();
+      console.log('🆕 Created new thread after clearing all:', this._selectedThreadId);
+    } catch (error) {
+      console.error('Error clearing conversations:', error);
+    }
+  }
+
+
+
+
 
   /**
    * Build context from current notebook state
@@ -429,15 +600,26 @@ export class ChatService implements IChatService {
   private _buildContext(): any {
     try {
       const notebookPath = this._cellManager.getActiveNotebookPath?.() || null;
+      
+      // Ensure we always have a valid thread ID
+      if (!this._selectedThreadId) {
+        this._selectedThreadId = this._generateThreadId();
+        console.log('🆕 No thread ID found, generated new one:', this._selectedThreadId);
+      }
+      
       return { 
         notebook_path: notebookPath,
-        selected_thread_id: this._selectedThreadId
+        thread_id: this._selectedThreadId  // Always send valid thread ID (renamed from selected_thread_id)
       };
     } catch (error) {
       console.warn('Failed to build minimal context:', error);
+      // Even in error case, ensure valid thread ID
+      if (!this._selectedThreadId) {
+        this._selectedThreadId = this._generateThreadId();
+      }
       return { 
         notebook_path: null,
-        selected_thread_id: this._selectedThreadId
+        thread_id: this._selectedThreadId
       };
     }
   }

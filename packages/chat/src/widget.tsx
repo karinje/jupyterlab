@@ -229,9 +229,9 @@ export class ChatManager {
       }
     });
 
-    clearBtn?.addEventListener('click', () => {
-      console.log('🔥 Clear button clicked');
-      this._chatService.clearHistory();
+    clearBtn?.addEventListener('click', async () => {
+      console.log('🔥 Clear button clicked - clearing current thread messages');
+      await (this._chatService as any).clearCurrentThread();
       this._clearMessagesDisplay();
     });
 
@@ -818,7 +818,7 @@ export class ChatManager {
   private async _createNewThread(): Promise<void> {
     console.log('🔥 Creating new thread');
     this._currentThreadId = null;
-    this._chatService.clearHistory();
+    (this._chatService as any).createNewThread();
     this._clearMessagesDisplay();
     this._hideThreadHistory();
     
@@ -840,7 +840,6 @@ export class ChatManager {
         await (this._chatService as any).clearAllConversations();
         this._availableThreads = [];
         this._currentThreadId = null;
-        this._chatService.clearHistory();
         this._clearMessagesDisplay();
         this._hideThreadHistory();
         this._updateThreadList();

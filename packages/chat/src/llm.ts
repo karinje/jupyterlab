@@ -8,7 +8,7 @@ import { getProviderForModel } from './models';
 export abstract class BaseLLMProvider implements ILLMProvider {
   protected _currentModel: string = '';
 
-  abstract sendMessage(message: string, context?: any): Promise<string>;
+  abstract sendMessage(message: string, context?: any, signal?: AbortSignal): Promise<string>;
   abstract getModels(): Promise<string[]>;
 
   setModel(model: string): void {
@@ -48,7 +48,7 @@ export class OpenAIProvider extends BaseLLMProvider {
     return Object.keys(this.mcpServers).length;
   }
 
-  async sendMessage(message: string, context?: any): Promise<string> {
+  async sendMessage(message: string, context?: any, signal?: AbortSignal): Promise<string> {
     try {
       console.log(
         '🚀 Sending to server extension with MCP servers:',
@@ -70,7 +70,8 @@ export class OpenAIProvider extends BaseLLMProvider {
             mcpServers: {}, // Temporarily disable MCP to isolate LangGraph
             context: context,
             chat_mode: 'langgraph' // Add chat mode selection
-          })
+          }),
+          signal: signal  // Add abort signal support
         },
         settings
       );
@@ -81,7 +82,7 @@ export class OpenAIProvider extends BaseLLMProvider {
       }
 
       const data = await response.json();
-      return data.response || 'No response received';
+      return data; // Return full object with thread_id, not just data.response
     } catch (error) {
       console.error('Error in OpenAI provider:', error);
       throw error;
@@ -133,80 +134,44 @@ export class OpenAIProvider extends BaseLLMProvider {
  * Claude (Anthropic) provider implementation
  */
 export class ClaudeProvider extends BaseLLMProvider {
-  private _apiKey: string = '';
-  private _baseUrl: string = 'https://api.anthropic.com/v1';
-
   constructor(apiKey?: string) {
     super();
-    if (apiKey) {
-      this._apiKey = apiKey;
-    }
+    // API key not stored - read from server-side settings
     this._currentModel = 'claude-3-sonnet-20240229';
   }
 
   setApiKey(apiKey: string): void {
-    this._apiKey = apiKey;
+    // API key not stored - read from server-side settings
   }
 
-  async sendMessage(message: string, context?: any): Promise<string> {
-    if (!this._apiKey) {
-      throw new Error('Claude API key not set');
-    }
+  async sendMessage(message: string, context?: any, signal?: AbortSignal): Promise<string> {
+    // All providers now go through the backend agent (no direct API calls)
+    const settings = ServerConnection.makeSettings();
+    const requestUrl = new URL('/api/chat/openai', settings.baseUrl).href;
 
-    const response = await fetch(`${this._baseUrl}/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': this._apiKey,
-        'anthropic-version': '2023-06-01'
+    const response = await ServerConnection.makeRequest(
+      requestUrl,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          message: message,
+          model: this._currentModel,
+          provider: 'anthropic',
+          context: context,
+          chat_mode: 'langgraph'
+        }),
+        signal: signal
       },
-      body: JSON.stringify({
-        model: this._currentModel,
-        max_tokens: 2000,
-        system: `You are a helpful assistant integrated into JupyterLab. You can help with code, analysis, and notebook manipulation. When you need to interact with cells, you can reference them by index (e.g., "cell 0", "cell 1").
-
-IMPORTANT: When a user asks for a plan, task breakdown, or steps to accomplish something, format your response using cards. Each card should follow this exact format:
-[CARD:Title|Description]
-
-For example:
-[CARD:Research the topic|Gather information about the subject from reliable sources]
-[CARD:Create outline|Structure the main points and subtopics]
-[CARD:Write first draft|Begin writing the content based on the outline]
-
-For regular questions that don't require planning, respond normally.`,
-        messages: [
-          {
-            role: 'user',
-            content: message
-          }
-        ]
-      })
-    });
+      settings
+    );
 
     if (!response.ok) {
-      throw new Error(`Claude API error: ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(`Server error: ${response.status} ${errorText}`);
     }
 
     const data = await response.json();
-
-    // Add proper null checks for Claude response
-    if (
-      !data ||
-      !data.content ||
-      !Array.isArray(data.content) ||
-      data.content.length === 0
-    ) {
-      throw new Error('Invalid response from Claude API: no content returned');
-    }
-
-    const content = data.content[0];
-    if (!content || typeof content.text !== 'string') {
-      throw new Error(
-        'Invalid response from Claude API: invalid content format'
-      );
-    }
-
-    return content.text;
+    return data; // Return full object with thread_id, not just data.response
   }
 
   async getModels(): Promise<string[]> {
@@ -223,52 +188,44 @@ For regular questions that don't require planning, respond normally.`,
  * Local model provider (for Ollama, etc.)
  */
 export class LocalProvider extends BaseLLMProvider {
-  private _baseUrl: string = 'http://localhost:11434';
-
   constructor(baseUrl?: string) {
     super();
-    if (baseUrl) {
-      this._baseUrl = baseUrl;
-    }
+    // Base URL not stored - read from server-side settings
     this._currentModel = 'llama2';
   }
 
   setBaseUrl(baseUrl: string): void {
-    this._baseUrl = baseUrl;
+    // Base URL not stored - read from server-side settings
   }
 
-  async sendMessage(message: string, context?: any): Promise<string> {
-    const response = await fetch(`${this._baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
+  async sendMessage(message: string, context?: any, signal?: AbortSignal): Promise<string> {
+    // All providers now go through the backend agent (no direct API calls)
+    const settings = ServerConnection.makeSettings();
+    const requestUrl = new URL('/api/chat/openai', settings.baseUrl).href;
+
+    const response = await ServerConnection.makeRequest(
+      requestUrl,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          message: message,
+          model: this._currentModel,
+          provider: 'ollama',
+          context: context,
+          chat_mode: 'langgraph'
+        }),
+        signal: signal
       },
-      body: JSON.stringify({
-        model: this._currentModel,
-        prompt: `You are a helpful assistant integrated into JupyterLab. You can help with code, analysis, and notebook manipulation.
-
-IMPORTANT: When a user asks for a plan, task breakdown, or steps to accomplish something, format your response using cards. Each card should follow this exact format:
-[CARD:Title|Description]
-
-For example:
-[CARD:Research the topic|Gather information about the subject from reliable sources]
-[CARD:Create outline|Structure the main points and subtopics]
-[CARD:Write first draft|Begin writing the content based on the outline]
-
-For regular questions that don't require planning, respond normally.
-
-User: ${message}
-
-Assistant: `
-      })
-    });
+      settings
+    );
 
     if (!response.ok) {
-      throw new Error(`Local model error: ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(`Server error: ${response.status} ${errorText}`);
     }
 
     const data = await response.json();
-    return data.result;
+    return data; // Return full object with thread_id, not just data.response
   }
 
   async getModels(): Promise<string[]> {

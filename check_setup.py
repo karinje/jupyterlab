@@ -57,12 +57,12 @@ def check_langgraph_agent():
         if packages_dir.exists():
             sys.path.insert(0, str(packages_dir))
 
-        from jupyter_agent_lg.agent import DataAnalysisAgent
+        from jupyter_agent_lg.agent import JupyterAgent
         from jupyter_agent_lg.state import StateManager, PlanStep
         from jupyter_agent_lg.llm import LLMRouter, OpenAILLM
         from jupyter_agent_lg.context import NotebookStateManager
 
-        print("  ✅ DataAnalysisAgent")
+        print("  ✅ JupyterAgent")
         print("  ✅ StateManager")
         print("  ✅ LLMRouter")
         print("  ✅ NotebookStateManager")

@@ -86,7 +86,6 @@ class AnalysisState(TypedDict, total=False):
     """
 
     # Core context - always present
-    original_request: str
     notebook_path: str
     conversation_history: List[Dict[str, str]]  # All chat messages
 
@@ -126,7 +125,6 @@ class StateManager:
 
     def __init__(self):
         self.required_fields = [
-            "original_request",
             "notebook_path",
             "conversation_history",
             "notebook_cells",
@@ -141,9 +139,12 @@ class StateManager:
         model: str = "gpt-4o",
         provider: str = "openai",
     ) -> AnalysisState:
-        """Create initial state for new analysis"""
+        """Create initial state for new analysis
+        
+        Note: request parameter kept for backward compatibility but not used
+        as a special field. Current user message should be in conversation_history.
+        """
         return AnalysisState(
-            original_request=request,
             notebook_path=notebook_path,
             conversation_history=conversation_history,
             notebook_cells=[],
@@ -178,7 +179,6 @@ class StateManager:
         # Safety check - prevent infinite loops
         if state["current_iteration"] >= state.get("max_iterations", 50):
             state["is_complete"] = True
-            state["next_action"] = "complete_analysis"
             state["reasoning"] = "Reached maximum iteration limit"
 
         return state
@@ -198,7 +198,6 @@ class StateManager:
         # If too many errors, complete with failure
         if state["error_count"] >= 5:
             state["is_complete"] = True
-            state["next_action"] = "complete_analysis"
             state["reasoning"] = "Too many errors encountered"
 
         return state
@@ -243,12 +242,18 @@ def create_initial_state(
     provider: str = "openai",
     thread_id: str = None,
 ) -> Dict[str, Any]:
-    """Create initial state for new analysis"""
+    """Create initial state for new analysis
+    
+    Note: request parameter is kept for backward compatibility but is not used
+    as a special field. The current user message should already be included
+    in conversation_history as the last message.
+    """
     if conversation_history is None:
         conversation_history = []
 
     return {
-        "original_request": request,
+        # Note: No longer including original_request as special field
+        # Current user message is already in conversation_history
         "notebook_path": notebook_path,
         "conversation_history": conversation_history,
         "notebook_cells": [],
@@ -276,7 +281,6 @@ def increment_iteration(state: Dict[str, Any]) -> Dict[str, Any]:
     # Safety check - prevent infinite loops
     if state["current_iteration"] >= state.get("max_iterations", 50):
         state["is_complete"] = True
-        state["next_action"] = "complete_analysis"
         state["reasoning"] = "Reached maximum iteration limit"
 
     return state

@@ -45,7 +45,7 @@ export interface ILLMProvider {
   /**
    * Send a message to the LLM and get a response
    */
-  sendMessage(message: string, context?: any): Promise<string>;
+  sendMessage(message: string, context?: any, signal?: AbortSignal): Promise<string>;
 
   /**
    * Get available models
@@ -158,9 +158,24 @@ export interface IChatService extends IDisposable {
   getHistory(): IChatMessage[];
 
   /**
-   * Clear chat history
+   * Clear display only - keep same thread and metadata
    */
-  clearHistory(): void;
+  clearDisplayOnly(): void;
+
+  /**
+   * Create new thread - clear display and generate new thread ID
+   */
+  createNewThread(): void;
+
+  /**
+   * Clear current thread messages - keep same thread ID but clear all messages
+   */
+  clearCurrentThread(): Promise<void>;
+
+  /**
+   * Clear all conversations - delete all threads from metadata
+   */
+  clearAllConversations(): Promise<void>;
 
   /**
    * Signal emitted when a new message is added

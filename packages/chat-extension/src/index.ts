@@ -259,7 +259,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
       caption: 'Clear the chat conversation history',
       execute: async () => {
         const { chatService } = await ensureChatService();
-        chatService.clearHistory();
+        (chatService as any).clearDisplayOnly();
       }
     });
 

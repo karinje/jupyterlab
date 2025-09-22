@@ -13,7 +13,7 @@ Key Features:
 - Multi-LLM support (OpenAI, Anthropic, Google)
 """
 
-from .agent import DataAnalysisAgent
+from .agent import JupyterAgent
 from .state import create_initial_state, increment_iteration
 from .context import NotebookStateManager
 from .schemas import LLMDecision
@@ -22,7 +22,7 @@ from .tools import create_jupyter_tools
 __version__ = "1.0.0"
 
 __all__ = [
-    "DataAnalysisAgent",
+    "JupyterAgent",
     "create_initial_state",
     "increment_iteration",
     "NotebookStateManager",
