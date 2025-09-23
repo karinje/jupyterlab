@@ -23,13 +23,15 @@ from pydantic import create_model, Field, BaseModel
 # Set up proper logging using simplified config
 try:
     from jupyter_tools_bridge.logging_config import get_logger
+
     logger = get_logger()
 except ImportError:
     # Fallback if centralized logging not available
     import logging
+
     logging.basicConfig(
         level=logging.INFO,
-        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+        format="[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
     )
     logger = logging.getLogger("jupyterlab")
 
@@ -278,7 +280,7 @@ class JupyterAgent:
                         description=t.description,
                         args_schema=StatusModel,
                         coroutine=t.coroutine,
-                        metadata=getattr(t, 'metadata', None),  # Preserve metadata
+                        metadata=getattr(t, "metadata", None),  # Preserve metadata
                     )
                     augmented.append(new_tool)
                 except Exception as e:
@@ -329,7 +331,7 @@ class JupyterAgent:
         logger.info(
             f"🤖 JupyterAgent initialized with {len(original_tools)} tools (augmented schemas for binding)"
         )
-        
+
         # Store tool info for API access
         self._bound_tools = original_tools
         self._tool_categories = self._categorize_tools(original_tools)
@@ -337,38 +339,36 @@ class JupyterAgent:
     def _categorize_tools(self, tools) -> Dict[str, list]:
         """Categorize tools by their metadata - NO HARDCODING!"""
         categories = {}
-        
-        for tool in tools:
-            tool_name = getattr(tool, 'name', str(tool))
-            
-            # Get tool_category from metadata
-            tool_metadata = getattr(tool, 'metadata', {}) or {}
-            tool_category = tool_metadata.get('tool_category', 'Other Tools')
-            
 
-            
+        for tool in tools:
+            tool_name = getattr(tool, "name", str(tool))
+
+            # Get tool_category from metadata
+            tool_metadata = getattr(tool, "metadata", {}) or {}
+            tool_category = tool_metadata.get("tool_category", "Other Tools")
+
             # Skip system tools - don't show to user
-            if tool_category == 'System Tools':
+            if tool_category == "System Tools":
                 continue
-            
+
             # Use the tool's own category metadata
             if tool_category not in categories:
                 categories[tool_category] = []
             categories[tool_category].append(tool_name)
-        
+
         return categories
-    
+
     def get_available_tool_categories(self) -> list:
         """Get list of available tool categories (public API)"""
         return list(self._tool_categories.keys())
-    
+
     def get_tool_info(self) -> Dict[str, Any]:
         """Get complete tool information (public API)"""
 
         return {
-            'categories': list(self._tool_categories.keys()),
-            'tools': self._tool_categories,
-            'total_tools': len(self._bound_tools)
+            "categories": list(self._tool_categories.keys()),
+            "tools": self._tool_categories,
+            "total_tools": len(self._bound_tools),
         }
 
     def _list_bound_tools_and_params(self, llm) -> List[Dict[str, Any]]:
@@ -514,9 +514,7 @@ class JupyterAgent:
             if name == "RespondToUser":
                 route = "end"
                 # Always surface the RespondToUser message as final_result so the UI shows exact text
-                preserved_state["final_result"] = args.get(
-                    "message", ""
-                )
+                preserved_state["final_result"] = args.get("message", "")
             preserved_state["route_after_tools"] = route
             preserved_state["messages"] = messages + [tool_msg]
             preserved_state["last_payload_name"] = name
@@ -626,7 +624,9 @@ class JupyterAgent:
             # Ensure chat messages (status/text) route to the current notebook over WS
             try:
                 self.chat_handler.default_notebook_path = notebook_path
-                self.chat_handler.current_thread_id = thread_id  # Set current thread for this request
+                self.chat_handler.current_thread_id = (
+                    thread_id  # Set current thread for this request
+                )
             except Exception:
                 pass
             # Keep internal default in sync to avoid repeated updates on subsequent turns
@@ -742,7 +742,7 @@ Cell Status:
 
 Output Types:
 - "matplotlib_plot" = Chart/graph created
-- "svg_plot" = SVG graphics  
+- "svg_plot" = SVG graphics
 - "dataframe_table" = Data table
 - "text" = Text output (may be truncated at 1000 chars)
 
@@ -795,18 +795,25 @@ Current Iteration: {state.get("current_iteration", 0)}"""
             # Create system message with instructions only (no conversation history)
             system_instructions = self._create_system_instructions()
             context_info = self._create_context_prompt(state)
-            system_message = {"role": "system", "content": f"{system_instructions}\n\n{context_info}"}
+            system_message = {
+                "role": "system",
+                "content": f"{system_instructions}\n\n{context_info}",
+            }
 
             # Build complete message history with conversation history as actual messages
             messages = [system_message]
-            
+
             # Add ALL conversation history as actual message objects (not text in system prompt)
             conversation_history = state.get("conversation_history", [])
             if conversation_history:
-                logger.info(f"🧠 [analyze_and_decide] Including {len(conversation_history)} conversation messages as actual message objects")
+                logger.info(
+                    f"🧠 [analyze_and_decide] Including {len(conversation_history)} conversation messages as actual message objects"
+                )
                 messages.extend(conversation_history)  # ALL messages from thread
             else:
-                logger.info("🧠 [analyze_and_decide] No conversation history to include")
+                logger.info(
+                    "🧠 [analyze_and_decide] No conversation history to include"
+                )
 
             # Note: Current user message is already included in conversation_history
             # Don't add original_request separately - it's just the first message in the thread
@@ -820,16 +827,24 @@ Current Iteration: {state.get("current_iteration", 0)}"""
             logger.info(
                 f"🧠 [analyze_and_decide] Final message count: {len(messages)} (system=1, conversation={len(conversation_history)}, state={len(state['messages'])})"
             )
-            
+
             # Log message structure for debugging
             for i, msg in enumerate(messages):
                 # Handle both dict messages and LangChain message objects
-                if hasattr(msg, 'type'):  # LangChain message object
-                    role = msg.type if hasattr(msg, 'type') else 'unknown'
-                    content_preview = str(msg.content)[:100] + "..." if len(str(msg.content)) > 100 else str(msg.content)
+                if hasattr(msg, "type"):  # LangChain message object
+                    role = msg.type if hasattr(msg, "type") else "unknown"
+                    content_preview = (
+                        str(msg.content)[:100] + "..."
+                        if len(str(msg.content)) > 100
+                        else str(msg.content)
+                    )
                 else:  # Dictionary message
                     role = msg.get("role", "unknown")
-                    content_preview = msg.get("content", "")[:100] + "..." if len(msg.get("content", "")) > 100 else msg.get("content", "")
+                    content_preview = (
+                        msg.get("content", "")[:100] + "..."
+                        if len(msg.get("content", "")) > 100
+                        else msg.get("content", "")
+                    )
                 logger.debug(f"  Message {i}: {role} - {content_preview}")
 
             # Introspect the bound runnable to fetch the raw OpenAI tools payload, if available
@@ -863,13 +878,33 @@ Current Iteration: {state.get("current_iteration", 0)}"""
 
             # Log tool_calls summary and details BEFORE any mutation
             tc = getattr(tool_response, "tool_calls", []) or []
+
+            # Extract tool names properly - LangChain tool_calls are dictionaries
+            tool_names = [
+                c.get("name", "unknown")
+                if isinstance(c, dict)
+                else getattr(c, "name", "unknown")
+                for c in tc
+            ]
+
             logger.warning(
-                f"🧠 [analyze_and_decide] LLM returned tool_calls={len(tc)} names={[getattr(c, 'name', 'unknown') for c in tc]}"
+                f"🧠 [analyze_and_decide] LLM returned tool_calls={len(tc)} names={tool_names}"
             )
             for idx, c in enumerate(tc):
                 try:
+                    # Extract tool call details - tool_calls are dictionaries in LangChain
+                    if isinstance(c, dict):
+                        tool_id = c.get("id", "unknown")
+                        tool_name = c.get("name", "unknown")
+                        tool_args = c.get("args", {})
+                    else:
+                        # Fallback for object-style access
+                        tool_id = getattr(c, "id", "unknown")
+                        tool_name = getattr(c, "name", "unknown")
+                        tool_args = getattr(c, "args", {})
+
                     logger.warning(
-                        f"🧠 [analyze_and_decide] tool[{idx}] id={getattr(c, 'id', 'unknown')} name={getattr(c, 'name', 'unknown')} args={getattr(c, 'args', {})}"
+                        f"🧠 [analyze_and_decide] tool[{idx}] id={tool_id} name={tool_name} args={tool_args}"
                     )
                 except Exception:
                     logger.warning(
@@ -972,44 +1007,40 @@ Current Iteration: {state.get("current_iteration", 0)}"""
             state["reasoning"] = f"Error sending response: {e}"
             return state
 
-
-
     def _summarize_notebook(self, notebook_cells: List[Dict]) -> str:
         """Create complete summary of all code cells with execution status"""
         if not notebook_cells:
             return "Empty notebook"
 
         code_cells = [c for c in notebook_cells if c.get("type") == "code"]
-        
+
         if not code_cells:
             return "No code cells in notebook"
 
         summary = "All Code Cells:\n"
-        
+
         for i, cell in enumerate(code_cells):
             source = cell.get("source", "").strip()
             if not source:
                 continue
-                
+
             # Check if cell was executed (has execution_count)
             execution_count = cell.get("execution_count")
             has_outputs = bool(cell.get("outputs"))
-            
+
             if execution_count is not None:
                 status = f"✅ Executed (#{execution_count})"
                 if has_outputs:
                     status += " with outputs"
             else:
                 status = "⏸️ Not executed"
-            
-            summary += f"Cell {i+1}: {status}\n{source}\n\n"
+
+            summary += f"Cell {i + 1}: {status}\n{source}\n\n"
 
         # Debug: Log the actual notebook summary being sent to LLM
         logger.info(f"📋 [_summarize_notebook] Summary for LLM: {summary[:500]}...")
-        
+
         return summary
-
-
 
     def _generate_summary(self, state: Dict[str, Any]) -> str:
         """Generate analysis summary"""
@@ -1023,7 +1054,9 @@ Current Iteration: {state.get("current_iteration", 0)}"""
         first_user_message = "N/A"
         for msg in conversation_history:
             if msg.get("role") == "user":
-                first_user_message = msg.get("content", "N/A")[:100] + ("..." if len(msg.get("content", "")) > 100 else "")
+                first_user_message = msg.get("content", "N/A")[:100] + (
+                    "..." if len(msg.get("content", "")) > 100 else ""
+                )
                 break
 
         return f"""

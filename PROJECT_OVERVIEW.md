@@ -174,7 +174,7 @@ cd ../../dev_mode && npm run build
 // packages/chat/src/tokens.ts - Add to ICellManager interface
 export interface ICellManager {
   // ... existing methods ...
-  
+
   /**
    * Get active notebook file path (or null if none)
    */
@@ -185,12 +185,12 @@ export interface ICellManager {
 getActiveNotebookPath(): string | null {
   const panel = this._notebookTracker.currentWidget as any;
   const currentPath = (panel && panel.context && panel.context.path) || null;
-  
+
   // Cache for fallback
   if (currentPath) {
     this._lastNotebookPath = currentPath;
   }
-  
+
   return currentPath || this._lastNotebookPath;
 }
 
@@ -227,10 +227,10 @@ async def _ensure_xsrf_cookie(self):
 
 async def insert_cell(self, ...):
     await self._ensure_xsrf_cookie()
-    
+
     headers = self._get_headers(xsrf=self._xsrf_token)
     cookies = {'_xsrf': self._xsrf_token} if self._xsrf_token else {}
-    
+
     # Send BOTH cookie and header (critical!)
     async with self.session.post(
         url, json=data, headers=headers, cookies=cookies
@@ -300,7 +300,7 @@ grep "🔥 TOOL_CALLS COUNT:" ./jlab.log
 #### **Issue 1: Frontend changes not reflecting**
 **Symptoms**: Chat still sends wrong notebook_path or missing context
 **Root Cause**: dev_mode bundle not rebuilt
-**Solution**: 
+**Solution**:
 ```bash
 cd dev_mode && npm run build
 # Then restart JupyterLab
@@ -334,7 +334,7 @@ pip install -e packages/chat
 
 #### **Issue 5: setuptools build errors**
 **Symptoms**: "setuptools not available in build environment"
-**Solution**: 
+**Solution**:
 ```bash
 pip install backports.tarfile
 pip install --no-build-isolation -e packages/chat
@@ -356,7 +356,7 @@ jupyter lab
 jupyterlab-ai-edition/
 ├── setup.py  # Bundles everything as single package
 ├── jupyterlab/  # Your JupyterLab fork
-├── jupyter_tools_bridge/  # Notebook manipulation tools  
+├── jupyter_tools_bridge/  # Notebook manipulation tools
 ├── packages/jupyter-agent/  # LangGraph agent
 ├── packages/chat/  # Chat with notebook targeting
 └── mcp-snowflake-service/  # MCP integration
@@ -428,7 +428,7 @@ python test_scripts/test_ydoc_tools.py
   - **Unified Backend Routing**: All providers now route through `/api/chat/openai`
   - **Provider Classes**:
     - `OpenAIProvider` - Handles GPT models via backend agent
-    - `ClaudeProvider` - Routes Anthropic requests through backend agent  
+    - `ClaudeProvider` - Routes Anthropic requests through backend agent
     - `LocalProvider` - Routes Ollama/local models through backend agent
   - **Key Change**: Removed frontend system messages - all prompts from backend agent
   - **AbortSignal Support**: All providers accept cancellation signals
@@ -684,7 +684,7 @@ except ImportError:
 # JupyterLab core logging level (to reduce noise)
 JUPYTERLAB_LOG_LEVEL = "WARNING"  # WARNING, ERROR
 
-# Our components logging level (for detailed debugging)  
+# Our components logging level (for detailed debugging)
 JUPYTERLAB_COMPONENTS_LOG_LEVEL = "DEBUG"  # DEBUG, INFO, WARNING, ERROR
 
 # Set environment variables for our logging config to read
@@ -822,7 +822,7 @@ grep -E "ERROR:|Failed" jlab.log
 ### **1. Conversation Flow Improvements** - **LATEST COMPLETION**
 - **Purpose**: Achieve natural ChatGPT-like conversation behavior with proper thread management
 - **Status**: ✅ COMPLETE - All improvements implemented and tested
-- **Key Achievements**: 
+- **Key Achievements**:
   - ✅ Conversation history now passed as actual message objects to LLM
   - ✅ Removed special handling of `original_request` (now just first user message)
   - ✅ Enhanced cancellation flow with `AbortController` for responsive chat behavior
@@ -841,9 +841,9 @@ grep -E "ERROR:|Failed" jlab.log
   - Visual feedback during notebook switching ("🔄 Switching to notebook...")
   - Clear conversations only affects current notebook
   - Enhanced debugging and error handling
-- **Files Modified**: 
+- **Files Modified**:
   - `packages/chat-extension/src/index.ts` - Enhanced notebook change handler
-  - `packages/chat/src/service.ts` - Added clearUIForNotebookSwitch() method  
+  - `packages/chat/src/service.ts` - Added clearUIForNotebookSwitch() method
   - `packages/chat/src/widget.tsx` - Fixed thread loading to use fresh data
   - `packages/chat/jupyterlab_chat/__init__.py` - Fixed backend bugs
 
@@ -891,7 +891,7 @@ grep -E "ERROR:|Failed" jlab.log
 #### **1. Frontend Chat Interaction**
 ```typescript
 // User sends message in chat UI (widget.tsx)
-ChatManager._sendMessage() 
+ChatManager._sendMessage()
   → ChatService.sendMessage()  // Cancel current request, build context
   → LLMProvider.sendMessage()  // Route to backend via /api/chat/openai
 ```
@@ -940,14 +940,17 @@ ChatMessageHandler.post()  // Receive agent response
 - **Agent**: Uses LangChain LLMs with tool calling for structured responses
 
 ### **🔄 NEXT STEPS**
-1. **Complete LangGraph Agent** (4 weeks)
+1. **Complete CreatePlan Integration** (2 weeks) - **[Design Document: CreatePlan Integration](./create_plan_integration_design.md)**
+   - Week 1: Backend plan cards endpoint, frontend display integration
+   - Week 2: Plan context integration, LLM-driven plan implementation
+2. **Complete LangGraph Agent** (4 weeks)
    - Week 1: Core graph implementation
    - Week 2: Interactive planning features
    - Week 3: Multi-LLM support
    - Week 4: Testing and optimization
-2. **Production Deployment** - Docker, Kubernetes, monitoring
-3. **Advanced Features** - Multi-notebook support, agent memory
-4. **Additional MCP Tools** - Beyond Snowflake (APIs, files, etc.)
+3. **Production Deployment** - Docker, Kubernetes, monitoring
+4. **Advanced Features** - Multi-notebook support, agent memory
+5. **Additional MCP Tools** - Beyond Snowflake (APIs, files, etc.)
 
 ### ⚠️ **PENDING ISSUES**
 1. **JupyterLab Production Build** - [See JUPYTERLAB_BUILD_ISSUES.md](./JUPYTERLAB_BUILD_ISSUES.md)
@@ -967,11 +970,11 @@ ChatMessageHandler.post()  // Receive agent response
      - ✅ **Comprehensive debugging** and error handling added
    - **Features Working**:
      - ✅ Conversations properly isolated per notebook
-     - ✅ Thread history loads correct threads for current notebook  
+     - ✅ Thread history loads correct threads for current notebook
      - ✅ Clear conversations only affects current notebook
      - ✅ Real-time UI updates during notebook transitions
      - ✅ Enhanced switching messages and connection info
-   - **Files Modified**: 
+   - **Files Modified**:
      - `packages/chat-extension/src/index.ts` - Enhanced notebook change handler
      - `packages/chat/src/service.ts` - Added clearUIForNotebookSwitch() method
      - `packages/chat/src/widget.tsx` - Fixed _showThreadHistory() to load fresh data
@@ -1100,7 +1103,7 @@ python test_scripts/test_ydoc_tools.py
 
 #### Goals
 - Ship each component as a standalone, installable extension (works on any JupyterLab 4.x).
-- Also ship a combined “AI Edition” distribution that includes all components preinstalled and pre-enabled.
+- Also ship a combined "AI Edition" distribution that includes all components preinstalled and pre-enabled.
 - Zero-Node install path for end users via federated labextensions bundled in Python wheels.
 
 #### Components to Package
@@ -1231,7 +1234,7 @@ After extensive testing and debugging, here's the **definitive** answer about YD
 pip install jupyter-collaboration  # Includes jupyter-docprovider
 ```
 
-**✅ REQUIRED: Core YDoc Stack**  
+**✅ REQUIRED: Core YDoc Stack**
 ```bash
 pip install jupyter-server-ydoc jupyter-ydoc
 # These are auto-installed by jupyter-collaboration
@@ -1292,14 +1295,14 @@ c.ServerApp.websocket_ping_timeout = 25
 async def get_live_notebook(self, path: str):
     # Get YDoc extension from web_app settings (automatically stored by framework)
     ydoc_ext = self.settings.get("jupyter_server_ydoc")  # ✅ Works
-    
+
     if not ydoc_ext:
         return None
-        
+
     # Get live document (requires collaboration package to work)
     ydoc = await ydoc_ext.get_document(
         path=path,
-        content_type="notebook", 
+        content_type="notebook",
         file_format="json",
         copy=False
     )
@@ -1312,16 +1315,16 @@ async def get_live_notebook(self, path: str):
 async def _save_conversations_to_notebook(self, notebook_path: str, conversations: Dict):
     # Same pattern as tools bridge
     ydoc_ext = self.serverapp.web_app.settings.get("jupyter_server_ydoc")
-    
+
     if not ydoc_ext:
         logger.error("❌ YDoc extension not found - jupyter-collaboration may not be installed")
         return
-        
+
     # Update notebook metadata via YDoc (avoids race conditions with contents_manager)
     ydoc = await ydoc_ext.get_document(
         path=notebook_path,
         content_type="notebook",
-        file_format="json", 
+        file_format="json",
         copy=False
     )
     current_notebook = ydoc.get()
@@ -1339,7 +1342,7 @@ pip install jupyter-server-ydoc jupyter-ydoc jupyter-collaboration
 
 **What Each Package Provides:**
 - **`jupyter-server-ydoc`**: YDoc server extension with `get_document()` API
-- **`jupyter-ydoc`**: Core YDoc data structures (`YNotebook`, `YFile`)  
+- **`jupyter-ydoc`**: Core YDoc data structures (`YNotebook`, `YFile`)
 - **`jupyter-collaboration`**: Dependencies that enable YDoc document tracking
   - Includes `jupyter-docprovider` and other components
   - Server extension fails to load but package dependencies are essential
@@ -1349,7 +1352,7 @@ pip install jupyter-server-ydoc jupyter-ydoc jupyter-collaboration
 **✅ Normal (Expected) Logs:**
 ```
 [I] jupyter_server_ydoc | extension was successfully loaded.
-[W] jupyter_collaboration | extension failed loading with message: 
+[W] jupyter_collaboration | extension failed loading with message:
     ExtensionLoadingError('_load_jupyter_server_extension function was not found.')
 ```
 
@@ -1363,7 +1366,7 @@ pip install jupyter-server-ydoc jupyter-ydoc jupyter-collaboration
 
 **Problem Solved:**
 - Agent inserts cells via YDoc (live state) ✅
-- Chat backend saves metadata via YDoc (same live state) ✅  
+- Chat backend saves metadata via YDoc (same live state) ✅
 - No more race condition between live state and file system ✅
 - Cells persist after agent execution ✅
 
@@ -1380,7 +1383,7 @@ await contents_manager.save(notebook, notebook_path)  # Overwrote live YDoc stat
 # Chat backend uses YDoc (same live state as agent tools)
 ydoc = await ydoc_ext.get_document(notebook_path, ...)  # Live state
 current_notebook = ydoc.get()
-current_notebook["metadata"]["conversations"] = conversations  
+current_notebook["metadata"]["conversations"] = conversations
 ydoc.set(current_notebook)  # Updates live state only
 ```
 
@@ -1409,7 +1412,7 @@ install_requires = [
 ### **Key Takeaways - CORRECTED**
 
 1. **`jupyter-collaboration` package IS required** - provides essential dependencies for YDoc document tracking
-2. **`jupyter-collaboration` server extension WILL fail** - this is expected and doesn't affect functionality  
+2. **`jupyter-collaboration` server extension WILL fail** - this is expected and doesn't affect functionality
 3. **`c.YDocExtension.collaborative = True` may be required** - enables document tracking features
 4. **YDoc access via `jupyter_server_ydoc` settings key** - framework automatically stores extension instance
 5. **Both tools bridge and chat backend use same YDoc access pattern** - ensures consistency
@@ -1429,7 +1432,7 @@ We implemented a sophisticated **frontend-driven thread management system** that
 #### **Frontend-Only Thread Management**
 **Design Philosophy**: Frontend is the single source of truth for thread IDs. Backend never creates or manages thread IDs - it only processes what frontend provides.
 
-**Key Principle**: 
+**Key Principle**:
 - **Frontend owns thread lifecycle** (creation, switching, management)
 - **Backend owns conversation content** (message storage, history)
 - **No ambiguity** about thread creation vs continuation
@@ -1625,12 +1628,12 @@ conversations = await load_conversation_history(new_notebook_path)
 #### **Issue 1: Thread ID Management Race Condition**
 **Problem**: User and assistant messages were being saved to separate threads instead of the same conversation.
 
-**Root Cause**: 
+**Root Cause**:
 ```python
 # User message created Thread A
 active_thread_id = await save_conversation_message(notebook_path, user_message, None)
 
-# Assistant message created Thread B (new thread!)  
+# Assistant message created Thread B (new thread!)
 await save_conversation_message(notebook_path, assistant_message, None)  # No thread_id!
 ```
 
@@ -1658,8 +1661,8 @@ this._selectedThreadId = null;  ✅
 this._currentThreadId = threadsData.selected_thread_id;  ❌ (overrode null!)
 ```
 
-**Solution**: 
-1. **Frontend**: Modified `_createNewThread()` to keep `_selectedThreadId = null` 
+**Solution**:
+1. **Frontend**: Modified `_createNewThread()` to keep `_selectedThreadId = null`
 2. **Backend**: Added logic to respect explicit `null` selection for new thread creation
 3. **UI State**: Prevented auto-selection from overriding manual thread clearing
 
@@ -1743,14 +1746,14 @@ async def clear_all_conversations(self, notebook_path: str) -> bool:
     "uuid-1": {
       "title": "Data analysis discussion",
       "created": "2025-09-19T00:31:13Z",
-      "last_updated": "2025-09-19T00:35:42Z", 
+      "last_updated": "2025-09-19T00:35:42Z",
       "messages": [
         {"role": "user", "content": "analyze sales data", "timestamp": "..."},
         {"role": "assistant", "content": "Here's the analysis...", "timestamp": "..."}
       ]
     },
     "uuid-2": {
-      "title": "Plotting questions", 
+      "title": "Plotting questions",
       "messages": [...]
     }
   },
@@ -1803,7 +1806,7 @@ async def clear_all_conversations(self, notebook_path: str) -> bool:
 
 #### **Complete Thread Isolation Test**
 1. **Create Thread 1**: Send "hi testing thread 1" → Creates Thread A
-2. **Create Thread 2**: Click "+", send "hello testing thread 2" → Creates Thread B  
+2. **Create Thread 2**: Click "+", send "hello testing thread 2" → Creates Thread B
 3. **Context Test**: Switch to Thread A, ask "what did we discuss?" → References only Thread A
 4. **Context Test**: Switch to Thread B, ask "what did we discuss?" → References only Thread B
 5. **Verification**: Check backend data shows separate, isolated conversations
@@ -1824,7 +1827,7 @@ cd packages/chat && jlpm build
 cd ../chat-extension && jlpm build
 cd ../../dev_mode && npm run build  # CRITICAL for dev mode
 
-# 2. Backend changes (Python)  
+# 2. Backend changes (Python)
 pip install -e packages/chat
 pip install -e packages/jupyter-agent
 
@@ -1848,7 +1851,7 @@ jupyter lab --dev-mode --extensions-in-dev-mode --ServerApp.log_level=DEBUG --po
 **Implementation**: `_buildContext()` includes `selected_thread_id: this._selectedThreadId`
 
 #### **3. Cancellation on Thread Switch**
-**Decision**: Cancel running agents when user switches threads  
+**Decision**: Cancel running agents when user switches threads
 **Rationale**: Prevents responses from appearing in wrong threads
 **Implementation**: Frontend tracks current request, cancels before switching
 
@@ -1904,7 +1907,7 @@ The chat thread management system is **production-ready** with:
 - No collaboration WebSocket clients are connected (we don't use multi-user collaboration)
 - YDoc attempts to write to non-existent WebSocket connections during room initialization
 
-**Impact:** 
+**Impact:**
 - ✅ **No functional impact** - our tools work perfectly via direct YDoc API access
 - ❌ **Cosmetic issue** - error logs look unprofessional in production
 
@@ -1977,7 +1980,7 @@ c.ServerApp.websocket_ping_timeout = 25  # Must be < ping_interval
 
 **For Clean Production Logs:**
 1. **Include `jupyter-collaboration`** as optional dependency to eliminate WebSocket errors
-2. **Configure WebSocket ping settings** to eliminate timeout warnings  
+2. **Configure WebSocket ping settings** to eliminate timeout warnings
 3. **Implement notebook auto-trust** for agent-modified notebooks
 4. **Consider log filtering** to suppress non-critical YDoc collaboration warnings
 
