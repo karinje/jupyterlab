@@ -94,23 +94,37 @@ export class ChatService implements IChatService {
       this._currentRequest = null;
       this._currentAbortController = null;
       
-      if (error.name === 'AbortError') {
-        console.log('🛑 Message request was cancelled');
-        return;
+      // Check if this was an interruption/cancellation
+      if (error && (error.name === 'AbortError' || error.message?.includes('aborted'))) {
+        // Add interruption message
+        const interruptMessage: IChatMessage = {
+          id: UUID.uuid4(),
+          role: 'assistant',
+          content: 'Interrupting agent execution...',
+          timestamp: new Date(),
+          metadata: { 
+            messageType: 'interruption',  // Add messageType metadata
+            interruption: true 
+          }
+        };
+        this._messages.push(interruptMessage);
+        this._messageAdded.emit(interruptMessage);
+      } else {
+        console.error('Error sending message:', error);
+        // Add error message for other types of errors
+        const errorMessage: IChatMessage = {
+          id: UUID.uuid4(),
+          role: 'assistant',
+          content: 'Sorry, I encountered an error. Please try again.',
+          timestamp: new Date(),
+          metadata: { 
+            messageType: 'error',  // Add messageType metadata
+            error: true 
+          }
+        };
+        this._messages.push(errorMessage);
+        this._messageAdded.emit(errorMessage);
       }
-      
-      console.error('Error in ChatService.sendMessage:', error);
-      // Add error message
-      const errorMessage: IChatMessage = {
-        id: UUID.uuid4(),
-        role: 'assistant',
-        content: `Error: ${error.message}`,
-        timestamp: new Date(),
-        metadata: { error: true }
-      };
-
-      this._messages.push(errorMessage);
-      this._messageAdded.emit(errorMessage);
     }
   }
 
@@ -757,12 +771,24 @@ export class ChatService implements IChatService {
           const statusMessage: IChatMessage = {
             id: UUID.uuid4(),
             role: 'assistant',
-            content: `⏳ ${msg}`,
+            content: msg,  // Remove the ⏳ prefix - use metadata instead
             timestamp: new Date(),
-            metadata: { status: payload.status || 'working' }
+            metadata: { 
+              messageType: 'status',  // Add messageType metadata
+              status: payload.status || 'working',
+              wsConnId: this._wsConnId,
+              toolCallId,
+              threadId
+            }
           };
           this._messages.push(statusMessage);
           this._messageAdded.emit(statusMessage);
+        } else if (type === 'scroll_to_cell') {
+          // Handle notebook scrolling commands
+          const cellIndex = payload.cell_index;
+          if (typeof cellIndex === 'number') {
+            this._scrollToNotebookCell(cellIndex);
+          }
         } else if (type === 'plan') {
           this._planReceived.emit(payload);
         }
@@ -784,18 +810,58 @@ export class ChatService implements IChatService {
 
   private _scheduleReconnect(): void {
     if (this._isDisposed) return;
-    const attempts = Math.min(this._reconnectAttempts + 1, 6);
-    this._reconnectAttempts = attempts;
-    const delay = 500 * attempts + Math.floor(Math.random() * 250);
+
     if (this._reconnectTimer) {
       clearTimeout(this._reconnectTimer);
     }
-    const path = this._wsPath;
+
+    const delay = Math.min(1000 * Math.pow(2, this._reconnectAttempts), 30000);
+    this._reconnectAttempts++;
+
     this._reconnectTimer = setTimeout(() => {
-      this._reconnectTimer = null;
-      if (!this._isDisposed && path) {
-        this.connectStream(path);
-      }
+      this.connectStream(this._wsPath);
     }, delay);
+  }
+
+  private _scrollToNotebookCell(cellIndex: number): void {
+    try {
+      console.log(`📍 Attempting to scroll to cell ${cellIndex}`);
+      
+      // Use the cell manager to access the notebook
+      if (this._cellManager && typeof (this._cellManager as any).scrollToCell === 'function') {
+        (this._cellManager as any).scrollToCell(cellIndex);
+        console.log(`📍 Scrolled to cell ${cellIndex} via cell manager`);
+        return;
+      }
+      
+      // Fallback: Try to access notebook through JupyterLab shell
+      const app = (window as any).jupyterApp;
+      if (app && app.shell && app.shell.currentWidget) {
+        const currentWidget = app.shell.currentWidget;
+        
+        if (currentWidget.content && currentWidget.content.scrollToItem) {
+          console.log(`📍 Scrolling to cell ${cellIndex} via notebook widget`);
+          currentWidget.content.scrollToItem(cellIndex, 'center').catch((e: any) => {
+            console.warn('Failed to scroll to cell:', e);
+          });
+          return;
+        }
+      }
+      
+      // Last resort: Try to find notebook in DOM and scroll
+      const notebookElement = document.querySelector('.jp-Notebook');
+      if (notebookElement) {
+        const cellElement = notebookElement.querySelector(`[data-windowed-list-index="${cellIndex}"]`);
+        if (cellElement) {
+          console.log(`📍 Scrolling to cell ${cellIndex} via DOM`);
+          cellElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return;
+        }
+      }
+      
+      console.warn(`Could not scroll to cell ${cellIndex} - no method available`);
+    } catch (error) {
+      console.warn('Error scrolling to cell:', error);
+    }
   }
 }

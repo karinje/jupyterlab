@@ -28,7 +28,7 @@ export class ChatManager {
             steps
               .map((s: any, i: number) => `${i + 1}. ${s.title || 'Step'} — ${s.description || ''}`)
               .join('\n');
-          this._addMessageToDisplay('assistant', content);
+          this._addMessageToDisplay('assistant', content, new Date(), { messageType: 'plan' });
         });
       }
     } catch (e) {
@@ -319,7 +319,7 @@ export class ChatManager {
       // Handle notebook switch message
       if (message.metadata?.action === 'notebook_switch') {
         console.log('🔥 Handling notebook switch message:', message.content);
-        this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp);
+        this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp, message.metadata);
         
         // After a short delay, update connection info and remove the temporary message
         setTimeout(async () => {
@@ -345,16 +345,17 @@ export class ChatManager {
       
       // Show all real-time messages (including status), but filter status from history
       if (message.metadata?.fromHistory) {
-        // Historical messages: filter out status messages
-        if (message.content && !message.content.startsWith('[status]') && !message.content.startsWith('⏳')) {
-          this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp);
+        // Historical messages: filter out status messages using metadata
+        const messageType = message.metadata?.messageType;
+        if (message.content && messageType !== 'status') {
+          this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp, message.metadata);
         } else {
           console.log('🔥 Filtering out historical status message:', message.content.substring(0, 50));
         }
       } else {
         // Real-time messages: show everything (including status for live feedback)
         if (message.content) {
-          this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp);
+          this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp, message.metadata);
         }
       }
     });
@@ -363,10 +364,11 @@ export class ChatManager {
     const existingMessages = this._chatService.getHistory();
     console.log(`🔄 Displaying ${existingMessages.length} existing messages from history`);
     for (const msg of existingMessages) {
-      // Filter out status messages from history too
-      if (msg.content && !msg.content.startsWith('[status]') && !msg.content.startsWith('⏳')) {
+      // Filter out status messages from history using metadata
+      const messageType = msg.metadata?.messageType;
+      if (msg.content && messageType !== 'status') {
         console.log(`🔄 Displaying history message: ${msg.role} - ${msg.content.substring(0, 100)}...`);
-        this._addMessageToDisplay(msg.role as 'user' | 'assistant', msg.content, msg.timestamp);
+        this._addMessageToDisplay(msg.role as 'user' | 'assistant', msg.content, msg.timestamp, msg.metadata);
       } else {
         console.log(`🔄 Filtering out status message from history: ${msg.content.substring(0, 50)}...`);
       }
@@ -382,28 +384,86 @@ export class ChatManager {
   private _addMessageToDisplay(
     role: 'user' | 'assistant',
     content: string,
-    timestamp?: Date
+    timestamp?: Date,
+    metadata?: any
   ): void {
-    console.log('🔥 Adding message to display:', role, content);
-    const messagesContainer =
-      this._dialogElement?.querySelector('#chat-messages');
+    
+    const messagesContainer = this._dialogElement?.querySelector('#chat-messages');
     if (!messagesContainer) {
-      console.error('🔥 Messages container not found!');
+      console.warn('Messages container not found');
       return;
     }
 
-    // No welcome section to remove anymore
-
     const messageDiv = document.createElement('div');
-
-    const isUser = role === 'user';
-
-    // Check if content contains card data
+    
+    // Use metadata to identify special message types instead of content matching
+    const messageType = metadata?.messageType;
+    const isStatusMessage = messageType === 'status';
+    const isInterruptionMessage = messageType === 'interruption';
+    const isErrorMessage = messageType === 'error';
+    const isPlanMessage = messageType === 'plan';
+    const isSpecialMessage = isStatusMessage || isInterruptionMessage || isErrorMessage;
+    
+    // Check if content contains card data (for plan messages or regular messages with cards)
     const cards = this._extractCardsFromContent(content);
     const hasCards = cards.length > 0;
+    
+    if (isSpecialMessage) {
+      // Special styling for status, interruption, and error messages
+      let borderColor = '#007acc';  // default blue for status
+      let backgroundColor = '#f8f9fa';  // default background
+      
+      if (isInterruptionMessage) {
+        borderColor = '#ffc107';  // yellow for interruption
+        backgroundColor = '#fff3cd';
+      } else if (isErrorMessage) {
+        borderColor = '#dc3545';  // red for error
+        backgroundColor = '#f8d7da';
+      } else if (isStatusMessage) {
+        borderColor = '#6c757d';  // subtle gray for status
+        backgroundColor = '#f8f9fa';
+      }
+      
+      messageDiv.style.cssText = `
+        margin: 6px 0;
+        display: block;
+        width: 100%;
+      `;
+      
+      const cardDiv = document.createElement('div');
+      cardDiv.style.cssText = `
+        padding: 6px 10px;
+        border-radius: 4px;
+        background: ${backgroundColor};
+        border: 1px solid ${borderColor};
+        font-size: 12px;
+        color: #495057;
+        display: inline-block;
+        font-weight: 500;
+        max-width: 85%;
+      `;
+      
+      cardDiv.textContent = content;
+      messageDiv.appendChild(cardDiv);
 
-    if (hasCards) {
-      // Render cards instead of plain text
+      // Add timestamp for special messages too
+      if (timestamp || true) {  // Always show timestamp
+        const timeDiv = document.createElement('div');
+        timeDiv.style.cssText = `
+          font-size: 11px;
+          color: #666;
+          margin-top: 4px;
+          text-align: left;
+        `;
+        timeDiv.textContent = (timestamp || new Date()).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        messageDiv.appendChild(timeDiv);
+      }
+    } else if (hasCards || isPlanMessage) {
+      // Render cards for plan messages or any message with card patterns
+      messageDiv.style.cssText = `margin: 12px 0;`;
       messageDiv.innerHTML = `
         <div style="flex: 1;">
           ${this._renderCards(cards)}
@@ -416,29 +476,60 @@ export class ChatManager {
         </div>
       `;
     } else {
-      // Render regular message - keep original simple layout but without width constraints
-      messageDiv.style.marginBottom = '12px';
-      messageDiv.innerHTML = `
-        <div style="background: ${isUser ? '#007acc' : '#f5f5f5'}; color: ${
-          isUser ? 'white' : '#333'
-        }; padding: 8px 12px; border-radius: 8px; font-size: 14px; word-wrap: break-word; display: inline-block; max-width: 85%;">
-          ${content.replace(/\n/g, '<br>')}
-        </div>
-        <div style="font-size: 11px; color: #666; margin-top: 4px;">
-          ${(timestamp || new Date()).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit'
-          })}
-        </div>
+      // Regular message styling
+      const isUser = role === 'user';
+      messageDiv.style.cssText = `
+        margin: 12px 0;
+        display: flex;
+        flex-direction: column;
+        align-items: ${isUser ? 'flex-end' : 'flex-start'};
       `;
+
+      const bubbleDiv = document.createElement('div');
+      bubbleDiv.style.cssText = `
+        max-width: 80%;
+        padding: 12px 16px;
+        border-radius: 18px;
+        word-wrap: break-word;
+        white-space: pre-wrap;
+        font-size: 14px;
+        line-height: 1.4;
+        ${isUser 
+          ? 'background: #007acc; color: white; border-bottom-right-radius: 4px;'
+          : 'background: #f1f3f4; color: #333; border-bottom-left-radius: 4px;'
+        }
+      `;
+
+      // Format content for display
+      let displayContent = content;
+      
+      // Handle code blocks
+      if (displayContent.includes('```')) {
+        displayContent = this._formatCodeBlocks(displayContent);
+        bubbleDiv.innerHTML = displayContent;
+      } else {
+        bubbleDiv.textContent = displayContent;
+      }
+
+      messageDiv.appendChild(bubbleDiv);
+
+      // Add timestamp - always show below the message
+      const timeDiv = document.createElement('div');
+      timeDiv.style.cssText = `
+        font-size: 11px;
+        color: #666;
+        margin-top: 4px;
+        text-align: ${isUser ? 'right' : 'left'};
+      `;
+      timeDiv.textContent = (timestamp || new Date()).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      messageDiv.appendChild(timeDiv);
     }
 
     messagesContainer.appendChild(messageDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    console.log(
-      '🔥 Message added to DOM, total messages:',
-      messagesContainer.children.length
-    );
   }
 
   private _extractCardsFromContent(content: string): any[] {
@@ -532,17 +623,13 @@ export class ChatManager {
     `;
   }
 
-  // Card management methods
+  // Card management methods for plan creation
   editCard(cardId: string): void {
     const cardElement = document.getElementById(cardId);
     if (!cardElement) return;
 
-    const titleElement = cardElement.querySelector(
-      '.card-title'
-    ) as HTMLElement;
-    const descriptionElement = cardElement.querySelector(
-      '.card-description'
-    ) as HTMLElement;
+    const titleElement = cardElement.querySelector('.card-title') as HTMLElement;
+    const descriptionElement = cardElement.querySelector('.card-description') as HTMLElement;
 
     if (titleElement && descriptionElement) {
       // Focus on title and make it editable
@@ -589,9 +676,7 @@ export class ChatManager {
 
     // Focus on the new card's title for immediate editing
     setTimeout(() => {
-      const newTitleElement = newCardDiv.querySelector(
-        '.card-title'
-      ) as HTMLElement;
+      const newTitleElement = newCardDiv.querySelector('.card-title') as HTMLElement;
       if (newTitleElement) {
         newTitleElement.focus();
         newTitleElement.style.border = '1px solid #007acc';
@@ -1046,6 +1131,21 @@ export class ChatManager {
       this._dialogElement.parentNode.removeChild(this._dialogElement);
     }
     this._dialogElement = null;
+  }
+
+  private _escapeHtml(text: string): string {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  private _formatCodeBlocks(content: string): string {
+    return content.replace(
+      /```(\w+)?\n([\s\S]*?)```/g,
+      (match, lang, code) => {
+        return `<pre style="background: #f8f8f8; padding: 12px; border-radius: 6px; margin: 8px 0; overflow-x: auto; border-left: 3px solid #007acc;"><code style="font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 13px;">${this._escapeHtml(code.trim())}</code></pre>`;
+      }
+    );
   }
 
 

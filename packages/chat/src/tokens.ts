@@ -130,6 +130,11 @@ export interface ICellManager {
    * Delete a cell at the specified index
    */
   deleteCell(cellIndex: number): void;
+
+  /**
+   * Scroll to a specific cell in the notebook
+   */
+  scrollToCell(cellIndex: number): void;
 }
 
 /**

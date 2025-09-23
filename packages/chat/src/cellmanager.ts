@@ -351,15 +351,34 @@ export class CellManager implements ICellManager {
    */
   deleteCell(cellIndex: number): void {
     const notebook = this.getActiveNotebook();
-    if (!notebook || !notebook.model || !notebook.model.cells) {
-      throw new Error('No active notebook or notebook model');
+    if (notebook && cellIndex >= 0 && cellIndex < notebook.widgets.length) {
+      notebook.model?.deleteCell(cellIndex);
+    }
+  }
+
+  /**
+   * Scroll to a specific cell in the notebook
+   */
+  scrollToCell(cellIndex: number): void {
+    console.log(`[CellManager] scrollToCell called for index ${cellIndex}`);
+    
+    const notebook = this.getActiveNotebook();
+    if (!notebook) {
+      console.warn('[CellManager] No active notebook for scrolling');
+      return;
     }
 
-    const cells = notebook.model.cells;
-    if (cellIndex < 0 || cellIndex >= cells.length) {
-      throw new Error(`Invalid cell index: ${cellIndex}`);
+    try {
+      if (notebook.scrollToItem) {
+        console.log(`[CellManager] Scrolling to cell ${cellIndex}`);
+        notebook.scrollToItem(cellIndex, 'center').catch((e: any) => {
+          console.warn('[CellManager] Failed to scroll to cell:', e);
+        });
+      } else {
+        console.warn('[CellManager] scrollToItem method not available on notebook');
+      }
+    } catch (error) {
+      console.warn('[CellManager] Error scrolling to cell:', error);
     }
-
-    cells.remove(cellIndex);
   }
 } 

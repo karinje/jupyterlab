@@ -64,7 +64,8 @@ class ChatHandler:
                 await session.post(
                     f"{self.server_url}/api/chat/status",
                     json={
-                        "type": status_type,
+                        "type": "status",  # Always use "status" type for proper broadcast handling
+                        "status": status_type,  # Move the actual status to status field
                         "message": message,
                         "timestamp": datetime.utcnow().isoformat(),
                         "notebook_path": notebook_path or self.default_notebook_path,
@@ -542,14 +543,7 @@ class JupyterAgent:
             ):
                 logger.info(f"🛎️ [tools] sending status_message: {status_message}")
                 await self.chat_handler.send_status(status_message, "working")
-                # Mirror status into chat bubble for immediate visibility in the UI
-                if hasattr(self.chat_handler, "send_message"):
-                    try:
-                        await self.chat_handler.send_message(
-                            f"[status] {status_message}"
-                        )
-                    except Exception:
-                        pass
+                # Status message is sent via send_status() which creates proper status messages
         except Exception:
             pass
         # Aggregate tools we bound
@@ -638,7 +632,7 @@ class JupyterAgent:
             # Keep internal default in sync to avoid repeated updates on subsequent turns
             self.default_notebook_path = notebook_path
 
-            # Create initial state
+            # Initialize state
             initial_state = create_initial_state(
                 request, notebook_path, conversation_history, model, provider, thread_id
             )
@@ -674,33 +668,31 @@ class JupyterAgent:
                 f"🔍 notebook_path before workflow: {initial_state.get('notebook_path', 'MISSING')}"
             )
 
-            await self.chat_handler.send_status(
-                "🤖 LangGraph agent starting analysis...", "info"
-            )
-
             # Run the workflow with cancellation support
             logger.info(
                 f"🚀 About to call workflow.ainvoke with state keys: {list(initial_state.keys())}"
             )
             task = asyncio.create_task(self.workflow.ainvoke(initial_state))
             self.current_task = task
-            try:
-                final_state = await task
-            finally:
-                self.current_task = None
+            final_state = await task
+            self.current_task = None
             logger.info(
-                f"�� Workflow completed with final state keys: {list(final_state.keys())}"
+                f"🏁 Workflow completed with final state keys: {list(final_state.keys())}"
             )
 
             # Extract result to return
             result = final_state.get("final_result", "Analysis completed")
 
-            await self.chat_handler.send_status("✅ Analysis completed", "success")
+            # Don't send "analysis completed" status - let user decide when they're done
             return result
 
+        except asyncio.CancelledError:
+            logger.info("🛑 Agent execution cancelled by user - this is normal")
+            self.current_task = None
+            return "Task cancelled by user request"
         except Exception as e:
             logger.error(f"❌ Error processing request: {e}")
-            await self.chat_handler.send_status(f"❌ Error: {e}", "error")
+            self.current_task = None
             return f"Error processing request: {e}"
 
     def _create_system_instructions(self) -> str:

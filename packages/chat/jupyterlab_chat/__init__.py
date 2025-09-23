@@ -668,12 +668,13 @@ class ChatThreadsHandler(APIHandler):
             most_recent_time = 0
             
             for thread_id, thread_data in all_threads.items():
-                # Filter out status messages for accurate message count
+                # Filter out status messages for accurate message count using metadata
                 messages = thread_data.get("messages", [])
                 conversation_messages = []
                 for msg in messages:
-                    content = msg.get("content", "")
-                    if content and not content.startswith("[status]") and not content.startswith("⏳"):
+                    # Use metadata to filter out status messages instead of content matching
+                    message_type = msg.get("metadata", {}).get("messageType")
+                    if message_type != "status":
                         conversation_messages.append(msg)
                 
                 # Get thread metadata
@@ -869,6 +870,44 @@ class ChatCancelHandler(APIHandler):
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
 
+            self.set_status(500)
+            self.finish({"error": str(e)})
+
+
+class ChatScrollHandler(APIHandler):
+    """Handler for notebook scroll commands from tools"""
+
+    def check_xsrf_cookie(self):
+        """Disable XSRF check for this endpoint"""
+        pass
+
+    @tornado.web.authenticated
+    async def post(self):
+        """Handle scroll requests from tools"""
+        try:
+            data = self.get_json_body()
+            notebook_path = data.get("notebook_path")
+            cell_index = data.get("cell_index")
+            
+            if not notebook_path or cell_index is None:
+                raise HTTPError(400, "Missing notebook_path or cell_index")
+            
+            logger.info(f"📍 Scroll request: {notebook_path} -> cell {cell_index}")
+            
+            # Broadcast scroll command using the same broadcaster as status messages
+            chat_broadcaster.broadcast({
+                "type": "scroll_to_cell",
+                "notebook_path": notebook_path,
+                "payload": {
+                    "cell_index": cell_index,
+                    "align": "center"
+                }
+            })
+            
+            self.finish({"status": "success"})
+            
+        except Exception as e:
+            logger.error(f"❌ Scroll request failed: {e}")
             self.set_status(500)
             self.finish({"error": str(e)})
 
@@ -1111,11 +1150,10 @@ class ChatAgentHandler(APIHandler):
                 # Filter out status messages - only use real conversation messages for context
                 filtered_messages = []
                 for msg in thread_messages:
-                    content = msg.get("content", "")
-                    if content and not content.startswith("[status]") and not content.startswith("⏳"):
+                    # Use metadata to filter out status messages instead of content matching
+                    message_type = msg.get("metadata", {}).get("messageType")
+                    if message_type != "status":
                         filtered_messages.append(msg)
-                    else:
-                        logger.debug(f"Filtering out status message: {content[:50]}...")
                 
                 conversation_context = filtered_messages[-100:]
                 logger.info(f"✅ Loaded {len(thread_messages)} total messages, filtered to {len(filtered_messages)} conversation messages, using last {len(conversation_context)} for context")
@@ -1435,7 +1473,7 @@ class ChatAgentHandler(APIHandler):
             else:
                 logger.info("✅ Reusing existing JupyterAgent")
             
-            agent = ChatAgentHandler._shared_agent
+            agent_instance = ChatAgentHandler._shared_agent
 
             logger.info("🚀 STEP 9: PROCESSING REQUEST")
             logger.info(f"📝 Message: '{message}'")
@@ -1448,31 +1486,28 @@ class ChatAgentHandler(APIHandler):
 
             # Process request
             result = await asyncio.wait_for(
-                agent.process_request(
-                    request=message,
-                    notebook_path=notebook_path,
-                    conversation_history=conversation_context,
-                    model=model,
-                    provider=provider,
-                    mcp_servers=mcp_servers_config,
-                    thread_id=thread_id,  # Pass thread_id to agent
+                agent_instance.process_request(
+                    message, notebook_path, conversation_context, model, provider, mcp_servers_config, thread_id
                 ),
-                timeout=300.0,  # 5 minute timeout
+                timeout=300  # 5 minutes max
             )
-            logger.info(f"✅ LANGGRAPH AGENT RETURNED: {result[:200]}...")
+            
+            logger.info(f"✅ LANGGRAPH AGENT RETURNED: {str(result)[:100]}...")
             logger.info("🚀 STEP 10: AGENT PROCESS REQUEST COMPLETED")
             logger.info(f"✅ RESULT TYPE: {type(result)}")
             logger.info(f"✅ RESULT LENGTH: {len(str(result))}")
-
+            
             return result
-
+            
+        except asyncio.CancelledError:
+            logger.info("🛑 LangGraph agent execution cancelled by user - this is normal")
+            return "Task cancelled by user request"
+        except asyncio.TimeoutError:
+            logger.warning("⏰ LangGraph agent timed out after 5 minutes")
+            return "Agent execution timed out. Please try a simpler request."
         except Exception as e:
-            import traceback
-
-            full_traceback = traceback.format_exc()
-            logger.error(f"❌ LangGraph agent execution failed: {e}")
-            logger.error(f"❌ FULL TRACEBACK:\n{full_traceback}")
-            return f"LangGraph agent error: {e}"
+            logger.error(f"❌ LangGraph agent failed: {e}")
+            return f"Agent error: {str(e)}"
 
     def _get_openai_api_key(self) -> str:
         """Get OpenAI API key from JupyterLab settings or environment"""
@@ -1576,6 +1611,9 @@ def _load_jupyter_server_extension(server_app):
         
         # Cancel ongoing agent tasks (used for thread switching and interruptions)
         (r"/api/chat/cancel", ChatCancelHandler),
+        
+        # Scroll commands from notebook tools (for auto-scrolling to executed cells)
+        (r"/api/chat/scroll", ChatScrollHandler),
         
         # Conversation management - clear all conversations, delete specific threads
         (r"/api/chat/conversations", ChatConversationsHandler),

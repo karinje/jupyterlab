@@ -447,6 +447,17 @@ class DeleteCellHandler(BaseToolsHandler):
 class ExecuteCellHandler(BaseToolsHandler):
     """Handler for executing cells and updating outputs in real-time."""
 
+    def _get_server_token(self) -> str:
+        """Get server token for authentication"""
+        token = None
+        if hasattr(self.serverapp, "identity_provider") and hasattr(
+            self.serverapp.identity_provider, "token"
+        ):
+            token = self.serverapp.identity_provider.token
+        if not token and hasattr(self.serverapp, "token"):
+            token = self.serverapp.token
+        return token or ""
+
     async def post(self):
         """Execute a cell and stream outputs back to it."""
         try:
@@ -583,6 +594,11 @@ class ExecuteCellHandler(BaseToolsHandler):
                         cell["execution_count"] = execution_count
                     notebook.set_cell(target_index, cell)
 
+                # Trigger notebook scrolling to the executed cell
+                scroll_to_cell = data.get("scroll_to_cell", True)
+                if scroll_to_cell:
+                    await self._trigger_notebook_scroll(path, target_index)
+
                 # logger.info(f"Executed cell at index {target_index} in {path}")
 
                 self.finish(
@@ -592,6 +608,7 @@ class ExecuteCellHandler(BaseToolsHandler):
                             "index": target_index,
                             "execution_count": execution_count,
                             "outputs_count": len(outputs),
+                            "scrolled": scroll_to_cell,
                         }
                     )
                 )
@@ -612,6 +629,38 @@ class ExecuteCellHandler(BaseToolsHandler):
         except Exception as e:
             # logger.error(f"Error executing cell: {e}", exc_info=True)
             raise HTTPError(500, str(e))
+
+    async def _trigger_notebook_scroll(self, notebook_path: str, cell_index: int):
+        """Trigger frontend notebook scrolling to the specified cell."""
+        try:
+            logger.info(f"📍 Triggering scroll to cell {cell_index} in {notebook_path}")
+            
+            # Send scroll request to chat module via HTTP (same pattern as status messages)
+            import aiohttp
+            
+            # Get server info for the request
+            server_url = f"http://127.0.0.1:{self.serverapp.port}"
+            token = self._get_server_token()
+            headers = {"Authorization": f"token {token}"} if token else {}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{server_url}/api/chat/scroll",
+                    json={
+                        "notebook_path": notebook_path,
+                        "cell_index": cell_index
+                    },
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=2)
+                ) as response:
+                    if response.status == 200:
+                        logger.info(f"📍 Scroll command sent successfully for cell {cell_index}")
+                    else:
+                        logger.warning(f"Scroll command failed: {response.status}")
+                
+        except Exception as e:
+            logger.warning(f"Failed to trigger notebook scroll: {e}")
+            # Don't fail the execution if scrolling fails
 
 
 class GetNotebookStateHandler(BaseToolsHandler):

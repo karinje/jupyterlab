@@ -31,14 +31,6 @@ def create_system_tools(chat_handler) -> List[StructuredTool]:
     """
 
     async def respond_to_user(message: str, thread_title: str, intent: str | None = None) -> str:
-        # Also surface completion as a status for visibility in UIs that highlight statuses
-        try:
-            if intent == "completion":
-                await chat_handler.send_status(message, "success")
-                logger.info(f"Sent completion status: {message[:100]}...")
-        except Exception as e:
-            logger.warning(f"Failed to send status: {e}")
-        
         # Send message with thread title - atomic operation
         await chat_handler.send_message(message, thread_title=thread_title)
         logger.info(f"Responded to user: intent={intent or 'none'}, title={thread_title}, message={message[:100]}...")

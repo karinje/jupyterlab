@@ -177,6 +177,7 @@ class JupyterTools:
         cell_id: str = None,
         index: int = None,
         stream: bool = True,
+        scroll_to_cell: bool = True,
     ) -> Dict[str, Any]:
         """
         Execute a cell and capture outputs.
@@ -187,22 +188,28 @@ class JupyterTools:
             cell_id: Optional cell ID to execute
             index: Optional cell index to execute
             stream: Whether to stream outputs in real-time
+            scroll_to_cell: Whether to scroll notebook to the executed cell
 
         Returns:
-            Dict containing execution results
+            Dict containing execution results with output confirmation
         """
         await self._ensure_session()
         await self._ensure_xsrf_cookie()
 
         url = f"{self.base_url}/api/tools/execute-cell"
-        data = {"path": notebook_path, "kernel_id": kernel_id, "stream": stream}
+        data = {
+            "path": notebook_path, 
+            "kernel_id": kernel_id, 
+            "stream": stream,
+            "scroll_to_cell": scroll_to_cell
+        }
 
         if cell_id:
             data["cell_id"] = cell_id
         if index is not None:
             data["index"] = index
 
-        logger.info(f"Executing cell in {notebook_path} with kernel {kernel_id}")
+        logger.info(f"Executing cell in {notebook_path} with kernel {kernel_id} (scroll: {scroll_to_cell})")
 
         # Ensure _xsrf cookie is sent along with header
         cookies = {'_xsrf': self._xsrf_token} if self._xsrf_token else {}
@@ -218,7 +225,19 @@ class JupyterTools:
                 raise Exception(f"Failed to execute cell: {error_text}")
 
             result = await response.json()
-            logger.info(f"Cell executed successfully: {result}")
+            
+            # Confirm outputs are properly attached
+            outputs_attached = result.get("outputs_attached", False)
+            has_output = result.get("has_output", False)
+            outputs_count = result.get("outputs_count", 0)
+            
+            if has_output and not outputs_attached:
+                logger.warning(f"Cell execution completed but outputs may not be properly attached (count: {outputs_count})")
+            
+            logger.info(f"Cell executed successfully: execution_count={result.get('execution_count')}, "
+                       f"outputs_count={outputs_count}, outputs_attached={outputs_attached}, "
+                       f"scrolled={result.get('scrolled', False)}")
+            
             return result
 
     async def update_cell(
