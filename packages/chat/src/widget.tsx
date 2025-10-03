@@ -11,7 +11,6 @@ export class ChatManager {
   private _currentThreadId: string | null = null;
   private _availableThreads: any[] = [];
 
-
   constructor(chatService: IChatService) {
     this._chatService = chatService;
     // Expose chat manager globally for card interactions
@@ -21,15 +20,38 @@ export class ChatManager {
     // Subscribe to live plan events if available
     try {
       if ((this._chatService as any).planReceived) {
-        (this._chatService as any).planReceived.connect((_: any, payload: any) => {
-          const steps = Array.isArray(payload?.steps) ? payload.steps : [];
-          if (steps.length === 0) return;
-          const content = `Plan:\n` +
-            steps
-              .map((s: any, i: number) => `${i + 1}. ${s.title || 'Step'} — ${s.description || ''}`)
+        (this._chatService as any).planReceived.connect(
+          (_: any, payload: any) => {
+            console.log('🔍 [widget] planReceived signal received:', payload);
+            const steps = Array.isArray(payload?.steps) ? payload.steps : [];
+            console.log(
+              '🔍 [widget] steps array:',
+              steps,
+              'length:',
+              steps.length
+            );
+            if (steps.length === 0) {
+              console.warn('🔍 [widget] No steps found, returning early');
+              return;
+            }
+            // Convert steps to [CARD:title|description] format that _extractCardsFromContent expects
+            const content = steps
+              .map(
+                (s: any) => `[CARD:${s.title || 'Step'}|${s.description || ''}]`
+              )
               .join('\n');
-          this._addMessageToDisplay('assistant', content, new Date(), { messageType: 'plan' });
-        });
+            console.log(
+              '🔍 [widget] Generated plan content with card format:',
+              content
+            );
+            console.log(
+              '🔍 [widget] Calling _addMessageToDisplay with messageType: plan'
+            );
+            this._addMessageToDisplay('assistant', content, new Date(), {
+              messageType: 'plan'
+            });
+          }
+        );
       }
     } catch (e) {
       console.warn('Failed to bind planReceived:', e);
@@ -69,7 +91,7 @@ export class ChatManager {
         </div>
         <button id="chat-close-btn" style="border: none; background: none; font-size: 18px; cursor: pointer; color: #666;">✕</button>
       </div>
-      
+
       <!-- Resize handles - invisible, cover entire borders like normal apps -->
       <div class="resize-handle resize-handle-n"></div>
       <div class="resize-handle resize-handle-s"></div>
@@ -80,7 +102,7 @@ export class ChatManager {
       <div class="resize-handle resize-handle-se"></div>
       <div class="resize-handle resize-handle-sw"></div>
 
-      
+
       <div id="thread-history-panel" style="
         display: none;
         background: #ffffff;
@@ -116,7 +138,7 @@ export class ChatManager {
             <option value="claude-3-opus-20240229">Claude 3 Opus</option>
             <option value="gemini-pro" disabled>Gemini Pro (Soon)</option>
           </select>
-          
+
           <!-- Thread Management Buttons -->
           <div style="display: flex; gap: 4px;">
             <button id="thread-history-btn" style="
@@ -236,11 +258,17 @@ export class ChatManager {
     });
 
     // Thread selector event handlers
-    const threadHistoryBtn = this._dialogElement.querySelector('#thread-history-btn') as HTMLButtonElement;
-    const newThreadBtn = this._dialogElement.querySelector('#new-thread-btn') as HTMLButtonElement;
-    const clearDebugBtn = this._dialogElement.querySelector('#clear-debug-btn') as HTMLButtonElement;
+    const threadHistoryBtn = this._dialogElement.querySelector(
+      '#thread-history-btn'
+    ) as HTMLButtonElement;
+    const newThreadBtn = this._dialogElement.querySelector(
+      '#new-thread-btn'
+    ) as HTMLButtonElement;
+    const clearDebugBtn = this._dialogElement.querySelector(
+      '#clear-debug-btn'
+    ) as HTMLButtonElement;
 
-    threadHistoryBtn?.addEventListener('click', async (event) => {
+    threadHistoryBtn?.addEventListener('click', async event => {
       event.preventDefault();
       event.stopPropagation();
       console.log('🔥 Thread history button clicked');
@@ -254,18 +282,26 @@ export class ChatManager {
 
     clearDebugBtn?.addEventListener('click', async () => {
       console.log('🔥 Clear debug button clicked');
-      if (confirm('Clear all conversation history for this notebook? This cannot be undone.')) {
+      if (
+        confirm(
+          'Clear all conversation history for this notebook? This cannot be undone.'
+        )
+      ) {
         await this._clearAllConversations();
       }
     });
 
     // Handle model selection and auto-infer provider
-    const modelSelect = this._dialogElement.querySelector('#chat-model') as HTMLSelectElement;
+    const modelSelect = this._dialogElement.querySelector(
+      '#chat-model'
+    ) as HTMLSelectElement;
     modelSelect?.addEventListener('change', () => {
       const selectedModel = modelSelect.value;
       const provider = getProviderForModel(selectedModel);
-      console.log(`🤖 Model changed to: ${selectedModel} (provider: ${provider})`);
-      
+      console.log(
+        `🤖 Model changed to: ${selectedModel} (provider: ${provider})`
+      );
+
       // Store the provider for use in requests (you can access it via modelSelect.dataset.provider)
       modelSelect.dataset.provider = provider;
     });
@@ -275,7 +311,9 @@ export class ChatManager {
       const initialModel = modelSelect.value;
       const initialProvider = getProviderForModel(initialModel);
       modelSelect.dataset.provider = initialProvider;
-      console.log(`🤖 Initial model: ${initialModel} (provider: ${initialProvider})`);
+      console.log(
+        `🤖 Initial model: ${initialModel} (provider: ${initialProvider})`
+      );
     }
 
     // Make dialog draggable
@@ -291,13 +329,17 @@ export class ChatManager {
     console.log('🔥 Dialog appended to body');
 
     // Add click-outside detection to close thread history dropdown
-    document.addEventListener('click', (event) => {
-      const panel = this._dialogElement?.querySelector('#thread-history-panel') as HTMLElement;
-      const button = this._dialogElement?.querySelector('#thread-history-btn') as HTMLElement;
-      
+    document.addEventListener('click', event => {
+      const panel = this._dialogElement?.querySelector(
+        '#thread-history-panel'
+      ) as HTMLElement;
+      const button = this._dialogElement?.querySelector(
+        '#thread-history-btn'
+      ) as HTMLElement;
+
       if (panel && panel.style.display !== 'none') {
         const target = event.target as HTMLElement;
-        
+
         // Check if click is outside both the panel and the button
         if (!panel.contains(target) && !button.contains(target)) {
           this._hideThreadHistory();
@@ -308,69 +350,111 @@ export class ChatManager {
     // Listen for chat service messages - NO DUPLICATE FILTERING
     this._chatService.messageAdded.connect((sender: any, message: any) => {
       console.log('🔥 Message received from service:', message);
-      
+
       // Handle special clear signal
       if (message.metadata?.action === 'clear') {
         console.log('🔥 Clearing chat UI for thread switch');
         this._clearMessagesDisplay();
         return;
       }
-      
+
       // Handle notebook switch message
       if (message.metadata?.action === 'notebook_switch') {
         console.log('🔥 Handling notebook switch message:', message.content);
-        this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp, message.metadata);
-        
+        this._addMessageToDisplay(
+          message.role as 'user' | 'assistant',
+          message.content,
+          message.timestamp,
+          message.metadata
+        );
+
         // After a short delay, update connection info and remove the temporary message
         setTimeout(async () => {
           try {
             // Remove the temporary switching message
-            const messagesContainer = this._dialogElement?.querySelector('#chat-messages');
+            const messagesContainer =
+              this._dialogElement?.querySelector('#chat-messages');
             if (messagesContainer) {
               const lastMessage = messagesContainer.lastElementChild;
-              if (lastMessage && lastMessage.textContent?.includes('🔄 Switching to notebook:')) {
+              if (
+                lastMessage &&
+                lastMessage.textContent?.includes('🔄 Switching to notebook:')
+              ) {
                 lastMessage.remove();
               }
             }
-            
+
             // Show updated connection info for new notebook
             await this._showConnectionInfo();
           } catch (error) {
-            console.warn('Error updating connection info after notebook switch:', error);
+            console.warn(
+              'Error updating connection info after notebook switch:',
+              error
+            );
           }
         }, 1500); // 1.5 second delay to show switching message
-        
+
         return;
       }
-      
+
       // Show all real-time messages (including status), but filter status from history
       if (message.metadata?.fromHistory) {
         // Historical messages: filter out status messages using metadata
         const messageType = message.metadata?.messageType;
         if (message.content && messageType !== 'status') {
-          this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp, message.metadata);
+          this._addMessageToDisplay(
+            message.role as 'user' | 'assistant',
+            message.content,
+            message.timestamp,
+            message.metadata
+          );
         } else {
-          console.log('🔥 Filtering out historical status message:', message.content.substring(0, 50));
+          console.log(
+            '🔥 Filtering out historical status message:',
+            message.content.substring(0, 50)
+          );
         }
       } else {
         // Real-time messages: show everything (including status for live feedback)
         if (message.content) {
-          this._addMessageToDisplay(message.role as 'user' | 'assistant', message.content, message.timestamp, message.metadata);
+          this._addMessageToDisplay(
+            message.role as 'user' | 'assistant',
+            message.content,
+            message.timestamp,
+            message.metadata
+          );
         }
       }
     });
 
     // CRITICAL FIX: Display any messages that were loaded from history before the listener was connected
     const existingMessages = this._chatService.getHistory();
-    console.log(`🔄 Displaying ${existingMessages.length} existing messages from history`);
+    console.log(
+      `🔄 Displaying ${existingMessages.length} existing messages from history`
+    );
     for (const msg of existingMessages) {
       // Filter out status messages from history using metadata
       const messageType = msg.metadata?.messageType;
       if (msg.content && messageType !== 'status') {
-        console.log(`🔄 Displaying history message: ${msg.role} - ${msg.content.substring(0, 100)}...`);
-        this._addMessageToDisplay(msg.role as 'user' | 'assistant', msg.content, msg.timestamp, msg.metadata);
+        console.log(
+          `🔄 Displaying history message: ${msg.role} - ${msg.content.substring(
+            0,
+            100
+          )}...`
+        );
+        this._addMessageToDisplay(
+          msg.role as 'user' | 'assistant',
+          msg.content,
+          msg.timestamp,
+          msg.metadata
+        );
       } else {
-        console.log(`🔄 Filtering out status message from history: ${msg.content.substring(0, 50)}...`);
+        console.log(
+          `🔄 Filtering out status message from history: ${msg.content.substring(
+            0,
+            50
+          )}...`
+        );
       }
     }
 
@@ -387,49 +471,50 @@ export class ChatManager {
     timestamp?: Date,
     metadata?: any
   ): void {
-    
-    const messagesContainer = this._dialogElement?.querySelector('#chat-messages');
+    const messagesContainer =
+      this._dialogElement?.querySelector('#chat-messages');
     if (!messagesContainer) {
       console.warn('Messages container not found');
       return;
     }
 
     const messageDiv = document.createElement('div');
-    
+
     // Use metadata to identify special message types instead of content matching
     const messageType = metadata?.messageType;
     const isStatusMessage = messageType === 'status';
     const isInterruptionMessage = messageType === 'interruption';
     const isErrorMessage = messageType === 'error';
     const isPlanMessage = messageType === 'plan';
-    const isSpecialMessage = isStatusMessage || isInterruptionMessage || isErrorMessage;
-    
+    const isSpecialMessage =
+      isStatusMessage || isInterruptionMessage || isErrorMessage;
+
     // Check if content contains card data (for plan messages or regular messages with cards)
     const cards = this._extractCardsFromContent(content);
     const hasCards = cards.length > 0;
-    
+
     if (isSpecialMessage) {
       // Special styling for status, interruption, and error messages
-      let borderColor = '#007acc';  // default blue for status
-      let backgroundColor = '#f8f9fa';  // default background
-      
+      let borderColor = '#007acc'; // default blue for status
+      let backgroundColor = '#f8f9fa'; // default background
+
       if (isInterruptionMessage) {
-        borderColor = '#ffc107';  // yellow for interruption
+        borderColor = '#ffc107'; // yellow for interruption
         backgroundColor = '#fff3cd';
       } else if (isErrorMessage) {
-        borderColor = '#dc3545';  // red for error
+        borderColor = '#dc3545'; // red for error
         backgroundColor = '#f8d7da';
       } else if (isStatusMessage) {
-        borderColor = '#6c757d';  // subtle gray for status
+        borderColor = '#6c757d'; // subtle gray for status
         backgroundColor = '#f8f9fa';
       }
-      
+
       messageDiv.style.cssText = `
         margin: 6px 0;
         display: block;
         width: 100%;
       `;
-      
+
       const cardDiv = document.createElement('div');
       cardDiv.style.cssText = `
         padding: 6px 10px;
@@ -442,12 +527,13 @@ export class ChatManager {
         font-weight: 500;
         max-width: 85%;
       `;
-      
+
       cardDiv.textContent = content;
       messageDiv.appendChild(cardDiv);
 
       // Add timestamp for special messages too
-      if (timestamp || true) {  // Always show timestamp
+      if (timestamp || true) {
+        // Always show timestamp
         const timeDiv = document.createElement('div');
         timeDiv.style.cssText = `
           font-size: 11px;
@@ -494,15 +580,16 @@ export class ChatManager {
         white-space: pre-wrap;
         font-size: 14px;
         line-height: 1.4;
-        ${isUser 
-          ? 'background: #007acc; color: white; border-bottom-right-radius: 4px;'
-          : 'background: #f1f3f4; color: #333; border-bottom-left-radius: 4px;'
+        ${
+          isUser
+            ? 'background: #007acc; color: white; border-bottom-right-radius: 4px;'
+            : 'background: #f1f3f4; color: #333; border-bottom-left-radius: 4px;'
         }
       `;
 
       // Format content for display
       let displayContent = content;
-      
+
       // Handle code blocks
       if (displayContent.includes('```')) {
         displayContent = this._formatCodeBlocks(displayContent);
@@ -534,6 +621,7 @@ export class ChatManager {
 
   private _extractCardsFromContent(content: string): any[] {
     const cards: any[] = [];
+    console.log('🔍 [_extractCardsFromContent] Processing content:', content);
 
     // Look for card patterns in the content
     // Pattern: [CARD:title|description]
@@ -541,13 +629,19 @@ export class ChatManager {
     let match;
 
     while ((match = cardPattern.exec(content)) !== null) {
-      cards.push({
+      const card = {
         id: `card-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         title: match[1].trim(),
         description: match[2].trim()
-      });
+      };
+      console.log('🔍 [_extractCardsFromContent] Found card:', card);
+      cards.push(card);
     }
 
+    console.log(
+      '🔍 [_extractCardsFromContent] Total cards found:',
+      cards.length
+    );
     return cards;
   }
 
@@ -568,55 +662,53 @@ export class ChatManager {
         padding: 12px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         position: relative;
-        max-width: 280px;
+        width: 100%;
         margin-bottom: 8px;
       ">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-          <div style="flex: 1; min-width: 0;">
-            <div class="card-title" contenteditable="true" style="
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div class="card-content" contenteditable="true" style="
+            flex: 1;
+            min-width: 0;
               font-size: 14px;
-              font-weight: 600;
               color: #333;
-              margin-bottom: 4px;
-              outline: none;
-              border: 1px solid transparent;
-              padding: 2px 4px;
-              border-radius: 4px;
-            ">${card.title}</div>
-            <div class="card-description" contenteditable="true" style="
-              font-size: 13px;
-              color: #666;
               line-height: 1.4;
               outline: none;
               border: 1px solid transparent;
-              padding: 2px 4px;
+            padding: 6px 8px;
               border-radius: 4px;
-            ">${card.description}</div>
-          </div>
-          <div style="display: flex; gap: 4px; margin-left: 8px;">
+            margin-right: 8px;
+          "><span class="card-title" style="font-weight: 600;">${card.title}</span>: <span class="card-description">${card.description}</span></div>
+          <div style="display: flex; gap: 4px;">
             <button class="add-step-btn" onclick="window.chatManager.addStepAfterCard('${card.id}')" style="
-              background: #4caf50;
-              color: white;
+              background: #e0e0e0;
+              color: #666;
               border: none;
               border-radius: 50%;
-              width: 24px;
-              height: 24px;
-              font-size: 16px;
+              width: 20px;
+              height: 20px;
+              font-size: 14px;
               cursor: pointer;
               display: flex;
               align-items: center;
               justify-content: center;
               font-weight: bold;
+              opacity: 0.7;
             ">+</button>
             <button class="delete-card-btn" onclick="window.chatManager.deleteCard('${card.id}')" style="
-              background: none;
-              border: none;
-              cursor: pointer;
-              font-size: 12px;
+              background: #e0e0e0;
               color: #666;
-              padding: 2px;
+              border: none;
+              border-radius: 50%;
+              width: 20px;
+              height: 20px;
+              font-size: 14px;
+              cursor: pointer;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-weight: bold;
               opacity: 0.7;
-            ">🗑️</button>
+            ">−</button>
           </div>
         </div>
       </div>
@@ -628,25 +720,23 @@ export class ChatManager {
     const cardElement = document.getElementById(cardId);
     if (!cardElement) return;
 
-    const titleElement = cardElement.querySelector('.card-title') as HTMLElement;
-    const descriptionElement = cardElement.querySelector('.card-description') as HTMLElement;
+    const contentElement = cardElement.querySelector(
+      '.card-content'
+    ) as HTMLElement;
 
-    if (titleElement && descriptionElement) {
-      // Focus on title and make it editable
-      titleElement.focus();
-      titleElement.style.border = '1px solid #007acc';
-      titleElement.style.backgroundColor = '#f8f9fa';
+    if (contentElement) {
+      // Focus on content and make it editable
+      contentElement.focus();
+      contentElement.style.border = '1px solid #007acc';
+      contentElement.style.backgroundColor = '#f8f9fa';
 
-      // Add event listeners for saving on blur
+      // Add event listener for saving on blur
       const saveChanges = () => {
-        titleElement.style.border = '1px solid transparent';
-        titleElement.style.backgroundColor = 'transparent';
-        descriptionElement.style.border = '1px solid transparent';
-        descriptionElement.style.backgroundColor = 'transparent';
+        contentElement.style.border = '1px solid transparent';
+        contentElement.style.backgroundColor = 'transparent';
       };
 
-      titleElement.addEventListener('blur', saveChanges, { once: true });
-      descriptionElement.addEventListener('blur', saveChanges, { once: true });
+      contentElement.addEventListener('blur', saveChanges, { once: true });
     }
   }
 
@@ -674,17 +764,19 @@ export class ChatManager {
 
     cardElement.parentNode?.insertBefore(newCardDiv, cardElement.nextSibling);
 
-    // Focus on the new card's title for immediate editing
+    // Focus on the new card's content for immediate editing
     setTimeout(() => {
-      const newTitleElement = newCardDiv.querySelector('.card-title') as HTMLElement;
-      if (newTitleElement) {
-        newTitleElement.focus();
-        newTitleElement.style.border = '1px solid #007acc';
-        newTitleElement.style.backgroundColor = '#f8f9fa';
+      const newContentElement = newCardDiv.querySelector(
+        '.card-content'
+      ) as HTMLElement;
+      if (newContentElement) {
+        newContentElement.focus();
+        newContentElement.style.border = '1px solid #007acc';
+        newContentElement.style.backgroundColor = '#f8f9fa';
 
         // Select all text for easy replacement
         const range = document.createRange();
-        range.selectNodeContents(newTitleElement);
+        range.selectNodeContents(newContentElement);
         const selection = window.getSelection();
         if (selection) {
           selection.removeAllRanges();
@@ -705,7 +797,9 @@ export class ChatManager {
   private async _showConnectionInfo(): Promise<void> {
     try {
       // Get notebook name from chat service
-      const notebookPath = (this._chatService as any)._cellManager?.getActiveNotebookPath?.() || 'Untitled.ipynb';
+      const notebookPath =
+        (this._chatService as any)._cellManager?.getActiveNotebookPath?.() ||
+        'Untitled.ipynb';
       const notebookName = notebookPath.split('/').pop() || notebookPath;
 
       // Get available tools
@@ -714,7 +808,7 @@ export class ChatManager {
 
       // Create connection message
       let connectionText = `Connected to notebook ${notebookName}`;
-      
+
       if (toolCategories.length > 0) {
         connectionText += ` with ${toolCategories.join(', ')}`;
       }
@@ -724,14 +818,17 @@ export class ChatManager {
     } catch (error) {
       console.error('Error showing connection info:', error);
       // Fallback connection message
-      const notebookPath = (this._chatService as any)._cellManager?.getActiveNotebookPath?.() || 'Untitled.ipynb';
+      const notebookPath =
+        (this._chatService as any)._cellManager?.getActiveNotebookPath?.() ||
+        'Untitled.ipynb';
       const notebookName = notebookPath.split('/').pop() || notebookPath;
       this._addConnectionMessage(`Connected to notebook ${notebookName}`);
     }
   }
 
   private _addConnectionMessage(content: string): void {
-    const messagesContainer = this._dialogElement?.querySelector('#chat-messages');
+    const messagesContainer =
+      this._dialogElement?.querySelector('#chat-messages');
     if (!messagesContainer) return;
 
     const messageDiv = document.createElement('div');
@@ -764,7 +861,9 @@ export class ChatManager {
           this._currentThreadId = threadsData.selected_thread_id;
         }
         this._updateThreadList();
-        console.log(`✅ Loaded ${this._availableThreads.length} threads, selected: ${this._currentThreadId}`);
+        console.log(
+          `✅ Loaded ${this._availableThreads.length} threads, selected: ${this._currentThreadId}`
+        );
       }
     } catch (error) {
       console.error('Error loading threads:', error);
@@ -776,12 +875,13 @@ export class ChatManager {
     if (!threadList) return;
 
     if (this._availableThreads.length === 0) {
-      threadList.innerHTML = '<div style="text-align: center; color: #666; padding: 16px;">No conversation history</div>';
+      threadList.innerHTML =
+        '<div style="text-align: center; color: #666; padding: 16px;">No conversation history</div>';
       return;
     }
 
     threadList.innerHTML = '';
-    
+
     this._availableThreads.forEach(thread => {
       const threadItem = document.createElement('div');
       threadItem.style.cssText = `
@@ -790,50 +890,58 @@ export class ChatManager {
         margin-bottom: 4px;
         cursor: pointer;
         border: 1px solid transparent;
-        ${thread.id === this._currentThreadId ? 'background: #e3f2fd; border-color: #2196f3;' : 'background: #f5f5f5;'}
+        ${
+          thread.id === this._currentThreadId
+            ? 'background: #e3f2fd; border-color: #2196f3;'
+            : 'background: #f5f5f5;'
+        }
       `;
-      
+
       threadItem.innerHTML = `
         <div style="font-weight: 500; font-size: 13px; color: #333; margin-bottom: 2px;">
           ${thread.title || 'Untitled'}
         </div>
         <div style="font-size: 11px; color: #666;">
-          ${thread.message_count} messages • ${this._formatDate(thread.last_updated)}
+          ${thread.message_count} messages • ${this._formatDate(
+            thread.last_updated
+          )}
         </div>
       `;
-      
-      threadItem.addEventListener('click', async (event) => {
+
+      threadItem.addEventListener('click', async event => {
         event.preventDefault();
         event.stopPropagation();
         console.log('🔄 Switching to thread:', thread.id);
-        
+
         // Immediately hide dropdown and update UI selection
         this._hideThreadHistory();
         this._currentThreadId = thread.id;
         this._updateThreadList(); // Update selection highlight immediately
-        
+
         // Then perform the async switch
         await this._switchToThread(thread.id);
       });
-      
+
       threadItem.addEventListener('mouseenter', () => {
         if (thread.id !== this._currentThreadId) {
           threadItem.style.background = '#e8e8e8';
         }
       });
-      
+
       threadItem.addEventListener('mouseleave', () => {
         if (thread.id !== this._currentThreadId) {
           threadItem.style.background = '#f5f5f5';
         }
       });
-      
+
       threadList.appendChild(threadItem);
     });
   }
 
   private async _toggleThreadHistory(): Promise<void> {
-    const panel = this._dialogElement?.querySelector('#thread-history-panel') as HTMLElement;
+    const panel = this._dialogElement?.querySelector(
+      '#thread-history-panel'
+    ) as HTMLElement;
     if (!panel) return;
 
     if (panel.style.display === 'none') {
@@ -844,10 +952,12 @@ export class ChatManager {
   }
 
   private async _showThreadHistory(): Promise<void> {
-    const panel = this._dialogElement?.querySelector('#thread-history-panel') as HTMLElement;
+    const panel = this._dialogElement?.querySelector(
+      '#thread-history-panel'
+    ) as HTMLElement;
     if (panel) {
       panel.style.display = 'block';
-      
+
       // CRITICAL FIX: Load fresh thread data for current notebook before showing list
       console.log('🔄 Loading fresh thread data for current notebook...');
       await this._loadThreads();
@@ -855,7 +965,9 @@ export class ChatManager {
   }
 
   private _hideThreadHistory(): void {
-    const panel = this._dialogElement?.querySelector('#thread-history-panel') as HTMLElement;
+    const panel = this._dialogElement?.querySelector(
+      '#thread-history-panel'
+    ) as HTMLElement;
     if (panel) {
       panel.style.display = 'none';
     }
@@ -884,14 +996,14 @@ export class ChatManager {
   private async _switchToThread(threadId: string): Promise<void> {
     try {
       console.log(`🔄 Switching to thread: ${threadId}`);
-      
+
       if ((this._chatService as any).switchThread) {
         await (this._chatService as any).switchThread(threadId);
         console.log('✅ Thread switched successfully');
-        
+
         // Show connection info after switching
         await this._showConnectionInfo();
-        
+
         // Refresh thread list to show all available threads
         await this._loadThreads();
       }
@@ -906,10 +1018,10 @@ export class ChatManager {
     (this._chatService as any).createNewThread();
     this._clearMessagesDisplay();
     this._hideThreadHistory();
-    
+
     // Show connection info for new thread
     await this._showConnectionInfo();
-    
+
     // Reload thread list from server but don't auto-select any thread
     const threadsData = await (this._chatService as any).loadThreads();
     this._availableThreads = threadsData.threads || [];
@@ -992,26 +1104,26 @@ export class ChatManager {
 
     // Add event listeners to all resize handles
     const resizeHandles = dialog.querySelectorAll('.resize-handle');
-    
+
     resizeHandles.forEach(handle => {
       handle.addEventListener('mousedown', (e: Event) => {
         const mouseEvent = e as MouseEvent;
         isResizing = true;
         resizeDirection = (handle as HTMLElement).className.split(' ')[1]; // Get direction class
-        
+
         startX = mouseEvent.clientX;
         startY = mouseEvent.clientY;
-        
+
         const rect = dialog.getBoundingClientRect();
         startWidth = rect.width;
         startHeight = rect.height;
         startLeft = rect.left;
         startTop = rect.top;
-        
+
         mouseEvent.preventDefault();
         mouseEvent.stopPropagation();
         console.log('🔥 Resize started:', resizeDirection);
-        
+
         // Add resizing class for visual feedback
         dialog.classList.add('jp-ChatDialog-resizing');
       });
@@ -1140,13 +1252,10 @@ export class ChatManager {
   }
 
   private _formatCodeBlocks(content: string): string {
-    return content.replace(
-      /```(\w+)?\n([\s\S]*?)```/g,
-      (match, lang, code) => {
-        return `<pre style="background: #f8f8f8; padding: 12px; border-radius: 6px; margin: 8px 0; overflow-x: auto; border-left: 3px solid #007acc;"><code style="font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 13px;">${this._escapeHtml(code.trim())}</code></pre>`;
-      }
-    );
+    return content.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
+      return `<pre style="background: #f8f8f8; padding: 12px; border-radius: 6px; margin: 8px 0; overflow-x: auto; border-left: 3px solid #007acc;"><code style="font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 13px;">${this._escapeHtml(
+        code.trim()
+      )}</code></pre>`;
+    });
   }
-
-
 }

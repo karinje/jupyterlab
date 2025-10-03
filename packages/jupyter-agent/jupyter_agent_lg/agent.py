@@ -98,7 +98,7 @@ class ChatHandler:
                 headers["Authorization"] = f"token {self.token}"
 
             async with aiohttp.ClientSession() as session:
-                response = await session.post(
+                await session.post(
                     f"{self.server_url}/api/chat/message",
                     json={
                         "content": message,
@@ -115,7 +115,12 @@ class ChatHandler:
         except Exception as e:
             logger.warning(f"Failed to send message: {e}")
 
-    async def display_plan_cards(self, plan_steps: List[Dict[str, str]]):
+    async def display_plan_cards(
+        self,
+        plan_steps: List[Dict[str, str]],
+        notebook_path: Optional[str] = None,
+        thread_id: Optional[str] = None,
+    ):
         """Display plan steps as editable cards in chat UI"""
         try:
             import aiohttp
@@ -129,7 +134,9 @@ class ChatHandler:
                     f"{self.server_url}/api/chat/plan_cards",
                     json={
                         "plan_steps": plan_steps,
+                        "notebook_path": notebook_path or self.default_notebook_path,
                         "timestamp": datetime.utcnow().isoformat(),
+                        "thread_id": thread_id,
                     },
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=5),
@@ -505,16 +512,26 @@ class JupyterAgent:
                 f"🛠️ [tools] executing name={name} args={args} id={first_call.get('id')}"
             )
             # Execute only the first tool_call and append its ToolMessage
-            result = await self._execute_single_tool(first_call)
+            # Special handling for CreatePlan to pass state context
+            if name == "CreatePlan":
+                result = await self._execute_create_plan_with_context(first_call, state)
+            else:
+                result = await self._execute_single_tool(first_call)
+
             tool_msg = ToolMessage(
                 content=str(result), name=name, tool_call_id=first_call.get("id")
             )
-            # Route based on tool name/inten
+            # Route based on tool name/intent
             route = "continue"
             if name == "RespondToUser":
                 route = "end"
                 # Always surface the RespondToUser message as final_result so the UI shows exact text
                 preserved_state["final_result"] = args.get("message", "")
+            elif name == "CreatePlan":
+                route = "end"  # Wait for user response after creating plan
+                preserved_state["final_result"] = (
+                    "Plan created. Please review and let me know how to proceed."
+                )
             preserved_state["route_after_tools"] = route
             preserved_state["messages"] = messages + [tool_msg]
             preserved_state["last_payload_name"] = name
@@ -556,6 +573,30 @@ class JupyterAgent:
                     return await t.func(**args)
                 return t.func(**args)
         return f"Tool {name} not found"
+
+    async def _execute_create_plan_with_context(
+        self, tool_call: Dict[str, Any], state: Dict[str, Any]
+    ):
+        """Execute CreatePlan tool with state context (notebook_path, thread_id)"""
+        args = dict(tool_call.get("args", {}) or {})
+        plan_steps = args.get("plan_steps", [])
+
+        # Convert plan steps to dict format
+        steps = [
+            step.model_dump() if hasattr(step, "model_dump") else dict(step)
+            for step in plan_steps
+        ]
+
+        # Get context from state
+        notebook_path = state.get("notebook_path")
+        thread_id = state.get("thread_id")
+
+        # Call display_plan_cards with context
+        await self.chat_handler.display_plan_cards(steps, notebook_path, thread_id)
+        logger.info(
+            f"Created plan with {len(steps)} steps (notebook: {notebook_path}, thread: {thread_id})"
+        )
+        return f"plan_created: steps={len(steps)}"
 
     def update_notebook_path(self, new_notebook_path: str):
         """Update tools and LLMs when notebook path changes"""
@@ -699,33 +740,92 @@ class JupyterAgent:
         """Create system instructions without conversation history"""
         return """You are a data analysis agent working in JupyterLab. Decide what to do next and EXPRESS your decision via TOOL CALLS ONLY.
 
-Tool-calling contract (STRICT):
-- Produce exactly ONE tool call per turn.
-- Include a short status_message in the tool args, summarizing the step you are about to perform.
-- Never emit plain-text answers unless you are explicitly using RespondToUser. If you intend to finish, call RespondToUser(intent="completion").
-If a single user request requires multiple actions, emit one tool at a time and rely on the next turn to continue. Do NOT emit multiple tools in a single turn.
-If you previously returned no tools, correct yourself by emitting exactly one valid tool call now.
+TOOL-CALLING CONTRACT (STRICT):
+- Produce exactly ONE tool call per turn
+- Include a short status_message in tool args, summarizing the step you are about to perform
+- Never emit plain-text answers unless using RespondToUser
+- If task is complete, call RespondToUser(intent="completion")
 
-CONTRACT (per turn):
-- Call EXACTLY ONE tool from this set: Jupyter tools, Snowflake tools, RespondToUser, CreatePlan.
-- Use RespondToUser(intent="completion") when you are finished.
-- Always include a concise status_message in the tool args to communicate progress to the user.
+AVAILABLE TOOLS & USAGE:
 
-Example (format only):
-- Assistant tool_calls:
-  - insert_and_execute_cell(code="import matplotlib.pyplot as plt\\n...", cell_type="code", position="end", status_message="Insert new code cell to plot x vs x**2")
+🔧 JUPYTER TOOLS:
+- insert_and_execute_cell(code, cell_type="code", position="end")
+  USE FOR: Python code execution, data analysis, visualization, computation
+  OUTPUTS: execution_count, text/DataFrame/plot outputs, real-time cell in UI
+  CONTEXT: Check notebook state first, build on existing work, use meaningful variables
 
-Available payload tool categories:
-- Jupyter tools: insert_and_execute_cell, delete_cell, etc.
-- Snowflake tools: query_snowflake, list_snowflake_tables, get_table_schema, get_database_info
-- RespondToUser(message, intent?)
+- delete_cell(cell_index)
+  USE FOR: Removing failed/duplicate/obsolete cells (use sparingly)
+  CONTEXT: Verify index, consider variable dependencies
+
+💬 COMMUNICATION TOOLS:
+- RespondToUser(message, intent, thread_title)
+  USE FOR: User communication, task completion, clarification requests
+  INTENTS: "completion" (ends turn), "clarification" (needs input), "status_update" (continues)
+  THREAD_TITLE: 3-8 words describing conversation topic
+
+📋 PLANNING TOOLS:
 - CreatePlan(plan_steps)
+  USE FOR: Multi-step tasks (3+ operations), complex analysis, ambiguous requests
+  STEPS: Specific, actionable, 1-2 sentences, logically ordered, 3-7 steps optimal
+  WORKFLOW: Create plan → User edits cards → User says "proceed" → Execute edited cards
 
-Guidance:
-- Use Jupyter tools for Python code execution, plotting, data analysis, mathematical operations, and general notebook tasks. For requests like "plot x,y" or "create a chart", use insert_and_execute_cell with Python/matplotlib code.
-- ONLY use Snowflake tools when the user explicitly mentions Snowflake, databases, SQL queries, or external data sources. Do NOT use Snowflake tools for simple plotting or mathematical operations.
-- Use RespondToUser to talk to the user (clarifications, updates). For completion, call RespondToUser(intent="completion", thread_title="Brief descriptive title").
-- Use CreatePlan to present a multi-step plan (explicit plan_steps)."""
+🗄️ DATABASE TOOLS (only when user mentions databases/SQL):
+- query_snowflake(query, database, schema_name)
+- list_snowflake_tables(database, schema_name)
+- get_table_schema(table_name, database)
+- get_database_info()
+
+PLAN CARD WORKFLOW (CRITICAL):
+
+WHEN TO CREATE PLANS:
+- Multi-step tasks requiring 3+ distinct operations
+- Complex analysis where user input would improve approach
+- Ambiguous requests needing clarification structure
+- High-stakes operations requiring user approval
+
+PLAN PRECEDENCE RULES:
+- Latest plan cards supersede ALL user requests before the plan
+- User messages AFTER a plan can modify or invalidate it
+- If user edits cards, implement EDITED version, not original request
+- Each plan creates a context boundary in conversation
+
+PLAN EXECUTION TRIGGERS:
+- User says: "proceed", "go ahead", "implement this", "looks good", "start"
+- User provides implementation feedback: "begin with step 1"
+- User asks execution questions: "how will you do step 2?"
+
+PLAN INVALIDATION SIGNALS:
+- User requests completely different task: "forget that, do X instead"
+- User says: "never mind", "cancel that", "ignore the plan"
+- User provides contradictory requirements
+
+CONVERSATION ANALYSIS:
+- Read conversation chronologically to understand context
+- Identify plan boundaries (user messages with [CARD:title|description] and messageType="plan")
+- Plans appear as user messages saying "Final plan that needs to be implemented:"
+- Determine current user intent (latest plan + subsequent messages)
+- Ignore superseded requests (messages before latest active plan)
+- If plan cards were edited, implement EDITED content, not original request
+
+DECISION EXAMPLES:
+
+Simple Request: "Plot sales over time"
+→ insert_and_execute_cell(code="plt.plot(df['date'], df['sales'])", status_message="Creating sales timeline plot")
+
+Complex Request: "Build comprehensive sales analysis with predictions"
+→ CreatePlan([Data loading, EDA, trend analysis, forecasting model, visualization])
+
+Clarification Needed: "Analyze the data" (no specifics)
+→ RespondToUser(message="I'd be happy to analyze your data. Could you specify what type of analysis you're looking for?", intent="clarification")
+
+Plan Execution: User edited cards and said "proceed"
+→ Execute first edited card step with insert_and_execute_cell
+
+Task Complete: Analysis finished with results
+→ RespondToUser(message="Analysis complete. Results show...", intent="completion")
+
+The conversation history shows you everything - read it naturally and respond appropriately to the user's current intent."""
 
     def _create_context_prompt(self, state: Dict[str, Any]) -> str:
         """Create context prompt for LLM decision making (notebook state only, no conversation history)"""
@@ -840,11 +940,9 @@ Current Iteration: {state.get("current_iteration", 0)}"""
                     )
                 else:  # Dictionary message
                     role = msg.get("role", "unknown")
-                    content_preview = (
-                        msg.get("content", "")[:100] + "..."
-                        if len(msg.get("content", "")) > 100
-                        else msg.get("content", "")
-                    )
+                    content_preview = msg.get(
+                        "content", ""
+                    )  # REMOVE TRUNCATION TO SEE FULL PLAN
                 logger.debug(f"  Message {i}: {role} - {content_preview}")
 
             # Introspect the bound runnable to fetch the raw OpenAI tools payload, if available

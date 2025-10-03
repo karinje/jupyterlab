@@ -12,14 +12,16 @@ import logging
 # Set up proper logging using simplified config
 try:
     from jupyter_tools_bridge.logging_config import get_logger
+
     logger = get_logger()
     tool_logger = get_logger()  # Same logger for tools
 except ImportError:
     # Fallback if centralized logging not available
     import logging
+
     logging.basicConfig(
         level=logging.INFO,
-        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+        format="[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
     )
     logger = logging.getLogger("jupyterlab")
     tool_logger = logging.getLogger("jupyterlab")
@@ -104,24 +106,37 @@ def create_jupyter_tools(
         StructuredTool.from_function(
             func=insert_and_execute_cell,
             name="insert_and_execute_cell",
-            description="Insert and execute a code cell or insert a markdown cell in the notebook",
+            description="""Insert and execute Python code in Jupyter notebook. Use for:
+- Data analysis, visualization, computation
+- Installing packages, importing libraries
+- Any Python operation that produces output
+- Building on previous notebook work
+
+OUTPUTS: execution_count (shows cell order), text/DataFrame/plot outputs, real-time cell in UI
+CONTEXT: Check notebook state first, build incrementally on existing work, use meaningful variable names""",
             args_schema=InsertCellArgs,
             coroutine=insert_and_execute_cell,
         ),
         StructuredTool.from_function(
             func=delete_cell,
             name="delete_cell",
-            description="Delete a cell from the notebook by index",
+            description="""Remove cells from notebook. Use for:
+- Cleaning up failed experiments
+- Removing duplicate or obsolete code
+- Correcting mistakes in cell sequence
+
+Use sparingly - prefer creating new cells over deleting.
+Verify cell index carefully to avoid deleting wrong content.""",
             args_schema=DeleteCellArgs,
             coroutine=delete_cell,
         ),
     ]
-    
+
     # Add category metadata to all Jupyter tools
     for tool in tools:
         if not tool.metadata:
             tool.metadata = {}
-        tool.metadata['tool_category'] = "Jupyter Notebook Tools"
+        tool.metadata["tool_category"] = "Jupyter Notebook Tools"
 
     tool_logger.info(
         f"Created {len(tools)} Jupyter tools for notebook: {notebook_path}"

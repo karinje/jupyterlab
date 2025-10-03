@@ -77,11 +77,11 @@ cd ../../dev_mode && npm run build
 ```typescript
 async sendMessage(message: string): Promise<void> {
     // ... add user message ...
-    
+
     try {
         const context = this._buildContext();
         const response = await this._llmProvider.sendMessage(message, context);
-        
+
         // ✅ CRITICAL FIX: Do not add assistant message from HTTP response
         // Rely solely on WebSocket broadcast for assistant messages
         console.log('[CHAT] HTTP return ignored; waiting for WS broadcast');
@@ -121,7 +121,7 @@ connectStream(notebookPath: string | null): void {
         params.push(`token=${encodeURIComponent(settings.token)}`);
     }
     wsUrl = wsUrl + `?${params.join('&')}`;
-    
+
     const ws = new settings.WebSocket(wsUrl);
     this._bindWS(ws);
 }
@@ -146,11 +146,11 @@ const ensureChatService = async (): Promise<{chatService: ChatService; chatManag
         globalChatManager = new ChatManager(globalChatService);
         __w.__JLAB_CHAT_SERVICE = globalChatService;
         __w.__JLAB_CHAT_MANAGER = globalChatManager;
-        
+
         // Connect WebSocket to active notebook
         const path = cellManager.getActiveNotebookPath?.() || null;
         globalChatService.connectStream?.(path);
-        
+
         // Set up notebook change listener (once only)
         if (!__w.__JLAB_CHAT_WATCH_BOUND) {
             notebookTracker.currentChanged.connect(() => {
@@ -172,12 +172,12 @@ const ensureChatService = async (): Promise<{chatService: ChatService; chatManag
 ```python
 async def execute_tools(self, state: Dict[str, Any]) -> Dict[str, Any]:
     # ... existing code ...
-    
+
     route = "continue"
     if name == "RespondToUser":  # ✅ FIX: End on ANY RespondToUser, not just completion intent
         route = "end"
         preserved_state["final_result"] = args.get("message", "")
-    
+
     preserved_state["route_after_tools"] = route
     # ... existing code ...
 ```
@@ -589,3 +589,681 @@ pkill -f "jupyter-lab" || true
 - Harden XSRF handling on internal calls and add tests.
 - Re-enable per-notebook thread loading from metadata and UI thread management.
 - Complete coverage tests for `CreatePlan` and Snowflake MCP flows to ensure chat ↔ tools ↔ agent integration is flawless.
+
+## CreatePlan Tool - Complete Workflow & Requirements
+
+### **🎯 Overview**
+The CreatePlan tool enables interactive, multi-step analysis planning where users can review, edit, and approve plans before execution. This creates a collaborative workflow between the LLM agent and user for complex tasks.
+
+### **🔧 When to Use CreatePlan**
+
+#### **ALWAYS Use CreatePlan When:**
+1. **Multi-step requests** requiring 3+ distinct operations
+2. **Complex analysis** involving multiple data sources, transformations, or visualizations
+3. **Ambiguous requests** where user input would improve the approach
+4. **High-stakes operations** where user review prevents costly mistakes
+5. **Exploratory analysis** where the path isn't immediately clear
+
+#### **Examples Requiring CreatePlan:**
+```
+User: "Analyze the sales data and create a comprehensive report"
+→ CreatePlan: [Data loading, EDA, trend analysis, visualization, summary]
+
+User: "Build a machine learning model to predict customer churn"
+→ CreatePlan: [Data prep, feature engineering, model selection, training, evaluation]
+
+User: "Compare Q1 vs Q2 performance across all regions"
+→ CreatePlan: [Data extraction, regional grouping, metric calculation, comparison charts]
+```
+
+#### **DON'T Use CreatePlan For:**
+- **Single-step tasks**: "Plot x vs y" → Direct execution
+- **Simple queries**: "Show first 5 rows" → Direct execution
+- **Clarification requests**: Use RespondToUser instead
+
+### **🏗️ Plan Card Architecture**
+
+#### **Plan Card Format in Conversation**
+When CreatePlan is called, plan steps are stored in conversation history as:
+```
+[CARD:title|description]
+[CARD:title|description]
+[CARD:title|description]
+```
+
+#### **Plan Card Lifecycle**
+1. **Agent Creates Plan**: `CreatePlan(plan_steps=[...])` → Cards displayed in UI
+2. **Plan Stored**: Assistant message with `[CARD:...]` format added to conversation
+3. **User Reviews**: User can edit card titles/descriptions directly in UI
+4. **Plan Updated**: Edited cards update the assistant message in conversation history
+5. **User Proceeds**: User sends message like "proceed", "go ahead", "implement this"
+6. **Agent Executes**: Agent sees updated cards in conversation and implements them
+
+#### **Critical Understanding: Plan Precedence Rules**
+
+**Rule 1: Latest Plan Supersedes Earlier Requests**
+```
+Conversation Flow:
+1. User: "Create a sales dashboard"
+2. Assistant: [CARD:Load data|...] [CARD:Create charts|...] [CARD:Build dashboard|...]
+3. User edits cards to: [CARD:Load Q4 data only|...] [CARD:Focus on regional breakdown|...]
+4. User: "proceed"
+5. Agent: Must implement EDITED cards, not original "sales dashboard" request
+```
+
+**Rule 2: New Requests Can Invalidate Plans**
+```
+Conversation Flow:
+1. User: "Analyze customer data"
+2. Assistant: [CARD:Load customers|...] [CARD:Segment analysis|...]
+3. User: "Actually, forget that. I want to analyze product sales instead"
+4. Agent: Should create NEW plan for product sales, ignoring customer plan
+```
+
+**Rule 3: Plan Context Boundaries**
+- **Plans override**: All user messages BEFORE the plan in conversation
+- **Plans don't override**: User messages AFTER the plan
+- **Multiple plans**: Each plan creates a new context boundary
+
+### **🧠 Agent Decision Logic for Plans**
+
+#### **Plan Detection Algorithm**
+```python
+def analyze_conversation_for_plans(conversation_history):
+    """
+    Agent should mentally process conversation to understand plan context
+    """
+    plans = []
+    current_context = []
+
+    for message in conversation_history:
+        if message.role == "assistant" and "[CARD:" in message.content:
+            # Found a plan - this creates a context boundary
+            plan = extract_cards_from_message(message.content)
+            plans.append({
+                "plan": plan,
+                "supersedes": current_context,  # This plan overrides these messages
+                "position": len(conversation_history)
+            })
+            current_context = []  # Reset context after plan
+        elif message.role == "user":
+            current_context.append(message)
+
+    return plans, current_context  # Latest plan + messages after last plan
+```
+
+#### **Decision Matrix for Agent**
+
+| Conversation State | Agent Action | Reasoning |
+|-------------------|--------------|-----------|
+| No plans exist | Evaluate if task needs CreatePlan | Simple → Execute, Complex → CreatePlan |
+| Plan exists, user says "proceed" | Execute latest plan cards | Plan cards are the authoritative instruction |
+| Plan exists, user gives new instruction | Determine if new instruction invalidates plan | If related → modify plan, If unrelated → new plan |
+| Multiple plans exist | Use latest plan + messages after it | Each plan creates context boundary |
+| Plan exists, user edits cards | Execute edited cards when user proceeds | Edited cards supersede original request |
+
+#### **Example Decision Scenarios**
+
+**Scenario 1: Plan Modification**
+```
+1. User: "Analyze sales data"
+2. Assistant: [CARD:Load data|...] [CARD:Create charts|...]
+3. User: "Also include customer segmentation in the analysis"
+4. Agent Decision: Modify existing plan to include segmentation
+   → CreatePlan with updated steps including segmentation
+```
+
+**Scenario 2: Plan Invalidation**
+```
+1. User: "Analyze sales data"
+2. Assistant: [CARD:Load sales|...] [CARD:Sales charts|...]
+3. User: "Never mind, I want to work on inventory analysis instead"
+4. Agent Decision: Completely new request, ignore sales plan
+   → CreatePlan for inventory analysis OR direct execution if simple
+```
+
+**Scenario 3: Plan Execution**
+```
+1. User: "Create ML model for predictions"
+2. Assistant: [CARD:Data prep|...] [CARD:Feature engineering|...] [CARD:Model training|...]
+3. User edits cards: [CARD:Data prep with outlier removal|...] [CARD:Advanced feature engineering|...]
+4. User: "looks good, proceed"
+5. Agent Decision: Execute the EDITED cards, not original request
+   → Start with "Data prep with outlier removal" step
+```
+
+### **💬 Conversation History & Context Integration**
+
+#### **How Plans Are Stored**
+Plans are stored as assistant messages in conversation metadata:
+```json
+{
+  "role": "assistant",
+  "content": "Here's my plan:\n\n[CARD:Load data|Import and validate the dataset]\n[CARD:Explore data|Perform EDA and identify patterns]\n[CARD:Create visualizations|Generate charts and graphs]",
+  "metadata": {"messageType": "plan"},
+  "timestamp": "2025-01-02T10:30:00Z"
+}
+```
+
+#### **Plan Updates in Conversation**
+When user edits cards:
+1. **Frontend**: User edits cards in UI
+2. **Backend**: `_handle_plan_update_sync()` updates the assistant message content
+3. **Conversation**: The same assistant message gets updated with new card content
+4. **Agent Context**: Agent sees updated cards in conversation history
+
+**Important**: There's only ONE plan message per plan - it gets updated in place, not duplicated.
+
+#### **Context Building for Agent**
+```python
+def build_agent_context(conversation_history):
+    """
+    Agent receives full conversation history including:
+    - Original user requests
+    - Plan cards (potentially edited)
+    - User feedback on plans
+    - Subsequent user messages
+    """
+    context_messages = []
+
+    for message in conversation_history:
+        if message.metadata.get("messageType") == "plan":
+            # This is a plan message - contains current card state
+            context_messages.append({
+                "role": "assistant",
+                "content": message.content  # Contains [CARD:...] format
+            })
+        else:
+            # Regular user/assistant message
+            context_messages.append(message)
+
+    return context_messages
+```
+
+### **🎨 User Experience Flow**
+
+#### **Complete Plan Workflow**
+```
+1. User Request: "Build a comprehensive sales analysis"
+
+2. Agent Analysis:
+   - Complex multi-step task → Use CreatePlan
+   - CreatePlan(plan_steps=[
+       {"title": "Data Loading", "description": "Import sales data from database"},
+       {"title": "Data Cleaning", "description": "Handle missing values and outliers"},
+       {"title": "Trend Analysis", "description": "Analyze sales trends over time"},
+       {"title": "Regional Breakdown", "description": "Compare performance by region"},
+       {"title": "Visualization", "description": "Create charts and dashboard"}
+     ])
+
+3. UI Display: Cards appear as editable elements in chat
+
+4. User Review: User edits cards:
+   - Changes "Data Loading" → "Load Q4 2024 sales data only"
+   - Changes "Regional Breakdown" → "Focus on top 5 regions by revenue"
+
+5. Plan Update: Backend updates conversation history with edited cards
+
+6. User Approval: "This looks perfect, please proceed"
+
+7. Agent Execution:
+   - Sees edited cards in conversation
+   - Executes: "Load Q4 2024 sales data only" (not generic data loading)
+   - Continues with other edited steps
+```
+
+#### **Plan Abandonment Flow**
+```
+1. User: "Analyze customer behavior"
+2. Agent: CreatePlan([customer data loading, behavior analysis, segmentation])
+3. User: "Actually, I changed my mind. Can you help me with inventory management instead?"
+4. Agent Analysis:
+   - New request is unrelated to customer behavior
+   - Previous plan should be ignored
+   - New request is complex → CreatePlan for inventory
+5. Agent: CreatePlan([inventory data loading, stock analysis, reorder recommendations])
+```
+
+### **🔧 Implementation Requirements**
+
+#### **System Prompt Enhancements**
+The agent needs enhanced instructions about plan handling:
+
+```
+PLAN CARD WORKFLOW (CRITICAL):
+
+1. WHEN TO CREATE PLANS:
+   - Multi-step tasks (3+ operations)
+   - Complex analysis requiring user input
+   - Ambiguous requests needing clarification
+   - High-stakes operations requiring approval
+
+2. PLAN PRECEDENCE RULES:
+   - Latest plan cards supersede ALL earlier user requests before the plan
+   - User messages AFTER a plan can modify or invalidate it
+   - If user edits cards, implement EDITED version, not original request
+   - Multiple plans: each creates a new context boundary
+
+3. PLAN EXECUTION TRIGGERS:
+   - User says: "proceed", "go ahead", "implement this", "looks good"
+   - User provides implementation feedback: "start with step 1"
+   - User asks execution questions: "how will you do step 2?"
+
+4. PLAN INVALIDATION SIGNALS:
+   - User requests completely different task: "forget that, do X instead"
+   - User says: "never mind", "cancel that", "ignore the plan"
+   - User provides contradictory requirements
+
+5. CONVERSATION ANALYSIS:
+   - Read conversation chronologically
+   - Identify plan boundaries (assistant messages with [CARD:title|description])
+   - Determine what the user CURRENTLY wants (latest plan + subsequent messages)
+   - Ignore superseded requests (messages before latest active plan)
+```
+
+#### **Tool Schema Improvements**
+Enhanced tool descriptions with specific use cases and expected outputs:
+
+```python
+# In system_tools.py
+CreatePlan.description = """
+Create interactive plan cards for multi-step tasks. Use when:
+- Task requires 3+ distinct operations
+- User input would improve the approach
+- Complex analysis needs user review
+- Ambiguous requests need clarification
+
+Each plan step should be:
+- Specific and actionable
+- 1-2 sentences maximum
+- Clear about expected outcome
+- Ordered logically
+
+The user can edit these cards before you proceed.
+"""
+
+RespondToUser.description = """
+Send a message to the user. Use for:
+- Asking clarifying questions
+- Providing status updates
+- Completing tasks (intent="completion")
+- Explaining results or next steps
+
+Always include a descriptive thread_title summarizing the conversation topic.
+"""
+```
+
+### **🧪 Testing Scenarios**
+
+#### **Test Case 1: Plan Creation & Execution**
+```
+Input: "Create a machine learning model to predict house prices"
+Expected: CreatePlan with steps for data prep, feature engineering, model training, evaluation
+User edits: Changes "basic features" to "advanced feature engineering with polynomial terms"
+User: "proceed"
+Expected: Agent implements advanced feature engineering, not basic
+```
+
+#### **Test Case 2: Plan Invalidation**
+```
+Input: "Analyze customer churn data"
+Agent: CreatePlan for churn analysis
+User: "Actually, I want to analyze product sales instead"
+Expected: Agent ignores churn plan, creates new plan for sales analysis
+```
+
+#### **Test Case 3: Plan Modification**
+```
+Input: "Create quarterly report"
+Agent: CreatePlan for Q4 report
+User: "Make it for Q1-Q3 instead, and add competitor analysis"
+Expected: Agent modifies plan to cover Q1-Q3 and include competitor analysis
+```
+
+### **🚨 Critical Implementation Notes**
+
+1. **Conversation Storage**: Plans are stored as assistant messages with `[CARD:title|description]` format
+2. **Plan Updates**: When user edits cards, the same assistant message is updated in place
+3. **Context Boundaries**: Each plan creates a boundary - messages before it are superseded
+4. **Agent Memory**: Agent must analyze full conversation to understand current context
+5. **UI Integration**: Cards are editable in frontend, changes sync to backend conversation storage
+
+This architecture ensures that the agent can handle complex, iterative planning workflows while maintaining clear context boundaries and user control over the execution plan.
+
+## System Instructions - Enhanced Tool Guidance
+
+### **🎯 Core Tool-Calling Principles**
+
+The agent must understand each tool's purpose, expected inputs, outputs, and when to use them. Here's the comprehensive guidance:
+
+#### **Tool Selection Decision Tree**
+```
+User Request Analysis:
+├── Single operation (plot, query, simple task)
+│   └── Use appropriate direct tool (insert_and_execute_cell, query_snowflake)
+├── Multi-step task (3+ operations)
+│   └── Use CreatePlan first, then execute steps
+├── Need user clarification
+│   └── Use RespondToUser with intent="clarification"
+└── Task complete
+    └── Use RespondToUser with intent="completion"
+```
+
+### **📋 Detailed Tool Instructions**
+
+#### **1. insert_and_execute_cell**
+**Purpose**: Execute Python code in Jupyter notebook
+**When to use**:
+- Data analysis, visualization, computation
+- Installing packages, importing libraries
+- Any Python operation that produces output
+- Building on previous notebook work
+
+**Expected outputs**:
+- `execution_count`: Shows cell execution order
+- `outputs`: Can include text, DataFrames, plots, errors
+- Real-time cell appears in notebook UI
+
+**Usage patterns**:
+```python
+# Data loading and exploration
+insert_and_execute_cell(
+    code="import pandas as pd\ndf = pd.read_csv('data.csv')\ndf.head()",
+    status_message="Loading and previewing dataset"
+)
+
+# Visualization
+insert_and_execute_cell(
+    code="plt.figure(figsize=(10,6))\nplt.plot(df['x'], df['y'])\nplt.title('X vs Y Analysis')",
+    status_message="Creating visualization"
+)
+
+# Complex analysis
+insert_and_execute_cell(
+    code="from sklearn.model_selection import train_test_split\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)",
+    status_message="Preparing data for machine learning"
+)
+```
+
+**Key considerations**:
+- Check notebook state first - don't repeat existing work
+- Build incrementally on previous cells
+- Use meaningful variable names that persist across cells
+- Include error handling for data operations
+
+#### **2. delete_cell**
+**Purpose**: Remove cells from notebook
+**When to use**:
+- Cleaning up failed experiments
+- Removing duplicate or obsolete code
+- Correcting mistakes in cell sequence
+
+**Usage patterns**:
+```python
+# Remove last cell if it had errors
+delete_cell(cell_index=-1, status_message="Removing failed cell")
+
+# Clean up specific problematic cell
+delete_cell(cell_index=3, status_message="Removing outdated analysis")
+```
+
+**Key considerations**:
+- Use sparingly - prefer creating new cells over deleting
+- Check cell index carefully to avoid deleting wrong content
+- Consider if cell deletion affects variable dependencies
+
+#### **3. RespondToUser**
+**Purpose**: Communicate with user
+**When to use**:
+- Task completion announcements
+- Asking clarifying questions
+- Providing explanations or status updates
+- Error reporting and next steps
+
+**Intent types**:
+- `"completion"`: Task is finished, ends conversation turn
+- `"clarification"`: Need user input to proceed
+- `"status_update"`: Progress report, conversation continues
+
+**Usage patterns**:
+```python
+# Task completion
+RespondToUser(
+    message="I've completed the sales analysis. The notebook now contains data loading, trend analysis, and visualizations showing Q4 performance increased 15% over Q3.",
+    intent="completion",
+    thread_title="Sales Analysis Report",
+    status_message="Finalizing analysis summary"
+)
+
+# Clarification request
+RespondToUser(
+    message="I need to clarify the date range for your analysis. Should I focus on the last 12 months, or do you have a specific period in mind?",
+    intent="clarification",
+    thread_title="Data Analysis Planning",
+    status_message="Requesting analysis parameters"
+)
+
+# Status update
+RespondToUser(
+    message="I've loaded the dataset (1.2M rows) and completed initial cleaning. Next, I'll perform the trend analysis you requested.",
+    intent="status_update",
+    thread_title="Large Dataset Analysis",
+    status_message="Providing progress update"
+)
+```
+
+**Thread title guidelines**:
+- 3-8 words describing conversation topic
+- Examples: "Sales Data Analysis", "ML Model Training", "Database Query Help"
+- Be specific but concise
+
+#### **4. CreatePlan**
+**Purpose**: Create interactive, editable analysis plans
+**When to use**:
+- Multi-step tasks requiring 3+ operations
+- Complex analysis where user input improves approach
+- Ambiguous requests needing structure
+- High-stakes operations requiring approval
+
+**Plan step guidelines**:
+- Each step should be specific and actionable
+- 1-2 sentences maximum per description
+- Clear about expected outcome
+- Logically ordered sequence
+- 3-7 steps optimal (not too granular, not too broad)
+
+**Usage patterns**:
+```python
+# Comprehensive analysis plan
+CreatePlan(
+    plan_steps=[
+        PlanStepOutput(
+            title="Data Loading & Validation",
+            description="Import dataset, check for missing values, validate data types and ranges"
+        ),
+        PlanStepOutput(
+            title="Exploratory Data Analysis",
+            description="Generate summary statistics, identify patterns, detect outliers"
+        ),
+        PlanStepOutput(
+            title="Feature Engineering",
+            description="Create derived features, handle categorical variables, scale numerical data"
+        ),
+        PlanStepOutput(
+            title="Model Development",
+            description="Train multiple algorithms, perform cross-validation, select best model"
+        ),
+        PlanStepOutput(
+            title="Results & Visualization",
+            description="Evaluate model performance, create prediction visualizations, summarize findings"
+        )
+    ],
+    status_message="Creating machine learning analysis plan"
+)
+
+# Simpler analysis plan
+CreatePlan(
+    plan_steps=[
+        PlanStepOutput(
+            title="Load Q4 Sales Data",
+            description="Import sales data for October-December 2024"
+        ),
+        PlanStepOutput(
+            title="Regional Performance Analysis",
+            description="Compare sales performance across different regions"
+        ),
+        PlanStepOutput(
+            title="Trend Visualization",
+            description="Create charts showing monthly trends and growth patterns"
+        )
+    ],
+    status_message="Planning quarterly sales analysis"
+)
+```
+
+**Plan execution workflow**:
+1. Agent creates plan → Cards displayed to user
+2. User can edit card titles/descriptions
+3. User says "proceed" or similar → Agent executes edited cards
+4. Agent implements steps based on CURRENT card content, not original request
+
+#### **5. Snowflake Tools (MCP)**
+**Purpose**: Query external databases via Model Context Protocol
+**When to use**: Only when user explicitly mentions databases, SQL, or data warehouses
+
+**Available tools**:
+- `query_snowflake`: Execute SQL queries
+- `list_snowflake_tables`: Discover available tables
+- `get_table_schema`: Understand table structure
+- `get_database_info`: Explore database metadata
+
+**Usage patterns**:
+```python
+# Discover available data
+list_snowflake_tables(
+    database="SALES_DB",
+    schema_name="PUBLIC",
+    status_message="Exploring available sales tables"
+)
+
+# Understand table structure
+get_table_schema(
+    table_name="CUSTOMER_ORDERS",
+    database="SALES_DB",
+    status_message="Analyzing customer orders table schema"
+)
+
+# Execute analysis query
+query_snowflake(
+    query="SELECT region, SUM(revenue) as total_revenue FROM sales_data WHERE date >= '2024-01-01' GROUP BY region ORDER BY total_revenue DESC",
+    database="SALES_DB",
+    status_message="Calculating regional revenue totals"
+)
+```
+
+**Integration with Jupyter**:
+- Query Snowflake to get data
+- Use insert_and_execute_cell to analyze results in Python
+- Combine database insights with notebook visualizations
+
+### **🧠 Enhanced System Prompt**
+
+```python
+def _create_system_instructions(self) -> str:
+    return """You are a data analysis agent working in JupyterLab. Decide what to do next and EXPRESS your decision via TOOL CALLS ONLY.
+
+TOOL-CALLING CONTRACT (STRICT):
+- Produce exactly ONE tool call per turn
+- Include a short status_message in tool args, summarizing the step you are about to perform
+- Never emit plain-text answers unless using RespondToUser
+- If task is complete, call RespondToUser(intent="completion")
+
+AVAILABLE TOOLS & USAGE:
+
+🔧 JUPYTER TOOLS:
+- insert_and_execute_cell(code, cell_type="code", position="end")
+  USE FOR: Python code execution, data analysis, visualization, computation
+  OUTPUTS: execution_count, text/DataFrame/plot outputs, real-time cell in UI
+  CONTEXT: Check notebook state first, build on existing work, use meaningful variables
+
+- delete_cell(cell_index)
+  USE FOR: Removing failed/duplicate/obsolete cells (use sparingly)
+  CONTEXT: Verify index, consider variable dependencies
+
+💬 COMMUNICATION TOOLS:
+- RespondToUser(message, intent, thread_title)
+  USE FOR: User communication, task completion, clarification requests
+  INTENTS: "completion" (ends turn), "clarification" (needs input), "status_update" (continues)
+  THREAD_TITLE: 3-8 words describing conversation topic
+
+📋 PLANNING TOOLS:
+- CreatePlan(plan_steps)
+  USE FOR: Multi-step tasks (3+ operations), complex analysis, ambiguous requests
+  STEPS: Specific, actionable, 1-2 sentences, logically ordered, 3-7 steps optimal
+  WORKFLOW: Create plan → User edits cards → User says "proceed" → Execute edited cards
+
+🗄️ DATABASE TOOLS (only when user mentions databases/SQL):
+- query_snowflake(query, database, schema_name)
+- list_snowflake_tables(database, schema_name)
+- get_table_schema(table_name, database)
+- get_database_info()
+
+PLAN CARD WORKFLOW (CRITICAL):
+
+WHEN TO CREATE PLANS:
+- Multi-step tasks requiring 3+ distinct operations
+- Complex analysis where user input would improve approach
+- Ambiguous requests needing clarification structure
+- High-stakes operations requiring user approval
+
+PLAN PRECEDENCE RULES:
+- Latest plan cards supersede ALL user requests before the plan
+- User messages AFTER a plan can modify or invalidate it
+- If user edits cards, implement EDITED version, not original request
+- Each plan creates a context boundary in conversation
+
+PLAN EXECUTION TRIGGERS:
+- User says: "proceed", "go ahead", "implement this", "looks good", "start"
+- User provides implementation feedback: "begin with step 1"
+- User asks execution questions: "how will you do step 2?"
+
+PLAN INVALIDATION SIGNALS:
+- User requests completely different task: "forget that, do X instead"
+- User says: "never mind", "cancel that", "ignore the plan"
+- User provides contradictory requirements
+
+CONVERSATION ANALYSIS:
+- Read conversation chronologically to understand context
+- Identify plan boundaries (assistant messages with [CARD:title|description])
+- Determine current user intent (latest plan + subsequent messages)
+- Ignore superseded requests (messages before latest active plan)
+- If plan cards were edited, implement EDITED content, not original request
+
+DECISION EXAMPLES:
+
+Simple Request: "Plot sales over time"
+→ insert_and_execute_cell(code="plt.plot(df['date'], df['sales'])", status_message="Creating sales timeline plot")
+
+Complex Request: "Build comprehensive sales analysis with predictions"
+→ CreatePlan([Data loading, EDA, trend analysis, forecasting model, visualization])
+
+Clarification Needed: "Analyze the data" (no specifics)
+→ RespondToUser(message="I'd be happy to analyze your data. Could you specify what type of analysis you're looking for?", intent="clarification")
+
+Plan Execution: User edited cards and said "proceed"
+→ Execute first edited card step with insert_and_execute_cell
+
+Task Complete: Analysis finished with results
+→ RespondToUser(message="Analysis complete. Results show...", intent="completion")
+
+The conversation history shows you everything - read it naturally and respond appropriately to the user's current intent."""
+```
+
+This enhanced system provides the agent with comprehensive understanding of:
+1. **When to use each tool** based on task complexity and user intent
+2. **Expected outputs** from each tool to set proper expectations
+3. **Plan workflow mechanics** including precedence rules and execution triggers
+4. **Context analysis** to understand conversation boundaries and current user intent
+5. **Practical examples** showing decision-making patterns
+
+The agent can now make informed decisions about tool selection and understand the complete lifecycle of plan-based workflows.

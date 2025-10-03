@@ -19,32 +19,41 @@ from jupyter_tools_bridge.tools import JupyterTools
 # Set up proper logging using simplified config
 try:
     from jupyter_tools_bridge.logging_config import get_logger
+
     logger = get_logger()
 except ImportError:
     # Fallback if centralized logging not available
     import logging
+
     logging.basicConfig(
         level=logging.INFO,
-        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+        format="[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
     )
     logger = logging.getLogger("jupyterlab")
 
 # Module-level debug to confirm our code is loaded
 logger.info("🔥🔥🔥 JUPYTERLAB CHAT MODULE IMPORTED - NEW VERSION! 🔥🔥🔥")
 
+
 class ChatBroadcaster:
     """Simple in-process broadcaster keyed by notebook_path."""
 
     def __init__(self):
-        self._subscribers: DefaultDict[str, Set[tornado.websocket.WebSocketHandler]] = defaultdict(set)
+        self._subscribers: DefaultDict[str, Set[tornado.websocket.WebSocketHandler]] = (
+            defaultdict(set)
+        )
         # Recent assistant messages to deduplicate bursts (notebook_path, content) -> last_ms
         self._recent_messages: Dict[tuple, float] = {}
 
-    def subscribe(self, notebook_path: str, ws: tornado.websocket.WebSocketHandler) -> None:
+    def subscribe(
+        self, notebook_path: str, ws: tornado.websocket.WebSocketHandler
+    ) -> None:
         key = notebook_path or "*"
         self._subscribers[key].add(ws)
 
-    def unsubscribe(self, notebook_path: str, ws: tornado.websocket.WebSocketHandler) -> None:
+    def unsubscribe(
+        self, notebook_path: str, ws: tornado.websocket.WebSocketHandler
+    ) -> None:
         key = notebook_path or "*"
         bucket = self._subscribers.get(key)
         if bucket and ws in bucket:
@@ -236,16 +245,24 @@ class ConversationManager:
 
                     notebook_data = await resp.json()
                     metadata = notebook_data.get("content", {}).get("metadata", {})
-                    chat_conversations = metadata.get("chat_conversations", self._create_empty_conversations())
-                    
+                    chat_conversations = metadata.get(
+                        "chat_conversations", self._create_empty_conversations()
+                    )
+
                     # Debug logging
                     thread_count = len(chat_conversations.get("threads", {}))
-                    logger.info(f"🔍 [load_conversation_history] Raw metadata has {thread_count} threads")
+                    logger.info(
+                        f"🔍 [load_conversation_history] Raw metadata has {thread_count} threads"
+                    )
                     if thread_count > 0:
-                        for tid, thread_data in chat_conversations.get("threads", {}).items():
+                        for tid, thread_data in chat_conversations.get(
+                            "threads", {}
+                        ).items():
                             msg_count = len(thread_data.get("messages", []))
-                            logger.info(f"  🔍 Raw metadata thread {tid[:8]}... has {msg_count} messages")
-                    
+                            logger.info(
+                                f"  🔍 Raw metadata thread {tid[:8]}... has {msg_count} messages"
+                            )
+
                     return chat_conversations
 
         except Exception as e:
@@ -253,7 +270,11 @@ class ConversationManager:
             return self._create_empty_conversations()
 
     async def save_conversation_message(
-        self, notebook_path: str, message: Dict, thread_id: Optional[str] = None, thread_title: Optional[str] = None
+        self,
+        notebook_path: str,
+        message: Dict,
+        thread_id: Optional[str] = None,
+        thread_title: Optional[str] = None,
     ) -> str:
         """Save a message to conversation thread and return thread_id"""
         try:
@@ -263,13 +284,14 @@ class ConversationManager:
             # Create new thread if needed (either no thread_id provided OR thread doesn't exist)
             if not thread_id:
                 thread_id = str(uuid.uuid4())
-            
+
             # Create thread if it doesn't exist (handles both new UUIDs from frontend and missing threads)
             if thread_id not in conversations["threads"]:
                 conversations["threads"][thread_id] = {
-                    "created": datetime.utcnow().isoformat() + 'Z',
-                    "last_updated": datetime.utcnow().isoformat() + 'Z',
-                    "title": thread_title or self._generate_thread_title(message.get("content", "")),
+                    "created": datetime.utcnow().isoformat() + "Z",
+                    "last_updated": datetime.utcnow().isoformat() + "Z",
+                    "title": thread_title
+                    or self._generate_thread_title(message.get("content", "")),
                     "messages": [],
                 }
                 conversations["active_thread"] = thread_id
@@ -278,15 +300,17 @@ class ConversationManager:
 
             # Add message to thread (thread is guaranteed to exist now)
             conversations["threads"][thread_id]["messages"].append(
-                {**message, "timestamp": datetime.utcnow().isoformat() + 'Z'}
+                {**message, "timestamp": datetime.utcnow().isoformat() + "Z"}
             )
             conversations["threads"][thread_id]["last_updated"] = (
-                datetime.utcnow().isoformat() + 'Z'
+                datetime.utcnow().isoformat() + "Z"
             )
             # Update thread title if provided (atomic with message save)
             if thread_title:
                 conversations["threads"][thread_id]["title"] = thread_title
-                logger.info(f"💾 Updated thread title to: '{thread_title}' for thread {thread_id}")
+                logger.info(
+                    f"💾 Updated thread title to: '{thread_title}' for thread {thread_id}"
+                )
             conversations["active_thread"] = thread_id
 
             # Update thread order (move to front)
@@ -331,20 +355,24 @@ class ConversationManager:
         """Clear all conversations for a notebook and save to disk"""
         try:
             logger.info(f"🧹 Clearing all conversations for notebook: {notebook_path}")
-            
+
             # Create empty conversation structure
             empty_conversations = {
                 "threads": {},
                 "active_thread": None,
-                "thread_order": []
+                "thread_order": [],
             }
-            
+
             # Save empty structure to notebook (this will persist to disk)
-            await self._save_conversations_to_notebook(notebook_path, empty_conversations)
-            
-            logger.info(f"✅ Successfully cleared all conversations for {notebook_path}")
+            await self._save_conversations_to_notebook(
+                notebook_path, empty_conversations
+            )
+
+            logger.info(
+                f"✅ Successfully cleared all conversations for {notebook_path}"
+            )
             return True
-            
+
         except Exception as e:
             logger.error(f"Error clearing conversations: {e}")
             return False
@@ -352,26 +380,32 @@ class ConversationManager:
     async def clear_thread_messages(self, notebook_path: str, thread_id: str) -> bool:
         """Clear all messages from a specific thread while keeping the thread structure"""
         try:
-            logger.info(f"🧹 Clearing messages from thread {thread_id} in notebook: {notebook_path}")
-            
+            logger.info(
+                f"🧹 Clearing messages from thread {thread_id} in notebook: {notebook_path}"
+            )
+
             # Load current conversations
             conversations = await self.load_conversation_history(notebook_path)
-            
+
             # Clear messages from the thread
             if thread_id in conversations.get("threads", {}):
                 # Keep thread structure but clear messages
                 conversations["threads"][thread_id]["messages"] = []
-                conversations["threads"][thread_id]["last_updated"] = datetime.utcnow().isoformat() + 'Z'
-                
+                conversations["threads"][thread_id]["last_updated"] = (
+                    datetime.utcnow().isoformat() + "Z"
+                )
+
                 # Save updated structure to notebook
                 await self._save_conversations_to_notebook(notebook_path, conversations)
-                
-                logger.info(f"✅ Successfully cleared messages from thread {thread_id} in {notebook_path}")
+
+                logger.info(
+                    f"✅ Successfully cleared messages from thread {thread_id} in {notebook_path}"
+                )
                 return True
             else:
                 logger.warning(f"⚠️ Thread {thread_id} not found in {notebook_path}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error clearing thread messages: {e}")
             return False
@@ -380,33 +414,37 @@ class ConversationManager:
         """Delete a specific thread from conversation history"""
         try:
             logger.info(f"🗑️ Deleting thread {thread_id} from notebook: {notebook_path}")
-            
+
             # Load current conversations
             conversations = await self.load_conversation_history(notebook_path)
-            
+
             # Remove the thread
             if thread_id in conversations.get("threads", {}):
                 del conversations["threads"][thread_id]
-                
+
                 # Remove from thread order
                 if thread_id in conversations.get("thread_order", []):
                     conversations["thread_order"].remove(thread_id)
-                
+
                 # Update active thread if it was the deleted one
                 if conversations.get("active_thread") == thread_id:
                     # Set active thread to most recent remaining thread or None
                     remaining_threads = conversations.get("thread_order", [])
-                    conversations["active_thread"] = remaining_threads[0] if remaining_threads else None
-                
+                    conversations["active_thread"] = (
+                        remaining_threads[0] if remaining_threads else None
+                    )
+
                 # Save updated structure to notebook
                 await self._save_conversations_to_notebook(notebook_path, conversations)
-                
-                logger.info(f"✅ Successfully deleted thread {thread_id} from {notebook_path}")
+
+                logger.info(
+                    f"✅ Successfully deleted thread {thread_id} from {notebook_path}"
+                )
                 return True
             else:
                 logger.warning(f"⚠️ Thread {thread_id} not found in {notebook_path}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error deleting thread: {e}")
             return False
@@ -414,59 +452,129 @@ class ConversationManager:
     async def _save_conversations_to_notebook(
         self, notebook_path: str, conversations: Dict
     ):
-        """Save conversations back to notebook metadata using YDoc to avoid file/live state conflicts"""
+        """Save conversations back to notebook metadata using Contents API for consistency with load_conversation_history"""
         try:
-            # Get YDoc extension from web_app settings (jupyter_server_ydoc)
-            ydoc_ext = self.serverapp.web_app.settings.get("jupyter_server_ydoc")
-            if ydoc_ext:
-                logger.info("✅ Found YDoc extension in web_app.settings")
-            else:
-                logger.error("❌ YDoc extension not found - jupyter_server_ydoc may not be loaded")
-                logger.error(f"Available settings keys: {list(self.serverapp.web_app.settings.keys())}")
-                return
+            # Use same pattern as load_conversation_history - Contents API via HTTP
+            import aiohttp
 
-            # Get live YDoc document (this is the authoritative live state)
-            try:
-                ydoc = await ydoc_ext.get_document(
-                    path=notebook_path,
-                    content_type="notebook",
-                    file_format="json",
-                    copy=False  # Get reference to live document, not a copy
-                )
-            except Exception as e:
-                logger.error(f"Failed to get YDoc for {notebook_path}: {e}")
-                return
+            server_url = f"http://127.0.0.1:{self.serverapp.port}"
+            token = self._get_server_token()
+            headers = {"Authorization": f"token {token}"}
 
-            # Get current notebook state from YDoc
-            current_notebook = ydoc.get()
-            if not current_notebook or not isinstance(current_notebook, dict):
-                logger.error(f"Invalid notebook state in YDoc for {notebook_path}")
-                return
+            async with aiohttp.ClientSession() as session:
+                # CRITICAL: Get XSRF token first (same pattern as tools bridge)
+                try:
+                    async with session.get(f"{server_url}/lab", headers=headers) as r:
+                        xsrf = r.cookies.get("_xsrf")
+                        if xsrf and xsrf.value:
+                            xsrf_token = xsrf.value
+                            logger.info("🔑 Got XSRF token for Contents API save")
+                        else:
+                            logger.warning("⚠️ No XSRF token found, save may fail")
+                            xsrf_token = None
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to get XSRF token: {e}")
+                    xsrf_token = None
 
-            # Update ONLY metadata, leave cells untouched
-            if "metadata" not in current_notebook:
-                current_notebook["metadata"] = {}
+                # First, get the current notebook to preserve all content
+                async with session.get(
+                    f"{server_url}/api/contents/{notebook_path}", headers=headers
+                ) as resp:
+                    if resp.status != 200:
+                        logger.error(
+                            f"Failed to load notebook for save {notebook_path}: {resp.status}"
+                        )
+                        return
 
-            current_notebook["metadata"]["chat_conversations"] = conversations
+                    notebook_data = await resp.json()
+                    current_notebook = notebook_data.get("content", {})
 
-            # Debug: Log what we're about to save
-            thread_count = len(conversations.get("threads", {}))
-            logger.info(f"🔍 [save] About to save {thread_count} threads to YDoc")
-            if thread_count > 0:
-                for tid, thread_data in conversations.get("threads", {}).items():
-                    msg_count = len(thread_data.get("messages", []))
-                    logger.info(f"  🔍 [save] Thread {tid[:8]}... has {msg_count} messages")
+                    # Update ONLY the chat_conversations metadata, preserve everything else
+                    if "metadata" not in current_notebook:
+                        current_notebook["metadata"] = {}
 
-            # Update YDoc live state (this preserves all cells and only updates metadata)
-            ydoc.set(current_notebook)
+                    current_notebook["metadata"]["chat_conversations"] = conversations
 
-            logger.info(f"💾 Saved conversation metadata to YDoc live state: {notebook_path}")
-            logger.info(f"📝 Conversation threads: {list(conversations.keys()) if isinstance(conversations, dict) else 'N/A'}")
+                    # Debug: Log what we're about to save
+                    thread_count = len(conversations.get("threads", {}))
+                    logger.info(
+                        f"🔍 [save] About to save {thread_count} threads via Contents API"
+                    )
+                    if thread_count > 0:
+                        for tid, thread_data in conversations.get(
+                            "threads", {}
+                        ).items():
+                            msg_count = len(thread_data.get("messages", []))
+                            logger.info(
+                                f"  🔍 [save] Thread {tid[:8]}... has {msg_count} messages"
+                            )
+
+                # Prepare save payload
+                save_data = {
+                    "type": "notebook",
+                    "format": "json",
+                    "content": current_notebook,
+                }
+
+                # Add XSRF token to headers (CRITICAL for Contents API)
+                save_headers = headers.copy()
+                if xsrf_token:
+                    save_headers["X-XSRFToken"] = xsrf_token
+
+                # Save via Contents API PUT
+                async with session.put(
+                    f"{server_url}/api/contents/{notebook_path}",
+                    headers=save_headers,
+                    json=save_data,
+                    cookies={"_xsrf": xsrf_token} if xsrf_token else {},
+                ) as save_resp:
+                    if save_resp.status == 200:
+                        logger.info(
+                            f"✅ Successfully saved conversation metadata via Contents API: {notebook_path}"
+                        )
+
+                        # Verify the save by reading back
+                        async with session.get(
+                            f"{server_url}/api/contents/{notebook_path}",
+                            headers=headers,
+                        ) as verify_resp:
+                            if verify_resp.status == 200:
+                                verify_data = await verify_resp.json()
+                                verify_conversations = (
+                                    verify_data.get("content", {})
+                                    .get("metadata", {})
+                                    .get("chat_conversations", {})
+                                )
+                                verify_thread_count = len(
+                                    verify_conversations.get("threads", {})
+                                )
+                                logger.info(
+                                    f"🔍 [save] Verification: file now has {verify_thread_count} threads"
+                                )
+
+                                if verify_thread_count == thread_count:
+                                    logger.info(
+                                        "✅ Save verification successful - thread counts match"
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"⚠️ Save verification mismatch: saved {thread_count}, verified {verify_thread_count}"
+                                    )
+                            else:
+                                logger.warning(
+                                    f"⚠️ Could not verify save: {verify_resp.status}"
+                                )
+                    else:
+                        error_text = await save_resp.text()
+                        logger.error(
+                            f"❌ Failed to save conversation metadata: {save_resp.status} - {error_text}"
+                        )
 
         except Exception as e:
-            logger.error(f"Error saving conversations to YDoc: {e}")
+            logger.error(f"❌ Error saving conversations via Contents API: {e}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
 
 
 class ChatStatusHandler(APIHandler):
@@ -495,9 +603,7 @@ class ChatStatusHandler(APIHandler):
                         import aiohttp
 
                         server_url = f"http://127.0.0.1:{self.serverapp.port}"
-                        token = ChatAgentHandler._get_server_token(
-                            self
-                        )  # reuse helper
+                        token = ChatAgentHandler._get_server_token(self)  # reuse helper
                         headers = {"Authorization": f"token {token}"}
                         async with aiohttp.ClientSession() as session:
                             async with session.get(
@@ -507,21 +613,32 @@ class ChatStatusHandler(APIHandler):
                                     data_sess = await resp.json()
                                     if isinstance(data_sess, dict):
                                         sessions = data_sess.get("sessions", [])
-                                        if isinstance(sessions, list) and len(sessions) > 0:
+                                        if (
+                                            isinstance(sessions, list)
+                                            and len(sessions) > 0
+                                        ):
                                             notebook_path = sessions[0].get("path")
                     if notebook_path and msg_text:
                         # Status messages should only be broadcast for real-time display,
                         # NOT saved to conversation history (they were creating separate threads)
-                        logger.info(f"📊 Broadcasting status message: {msg_text} (not saving to conversation)")
+                        logger.info(
+                            f"📊 Broadcasting status message: {msg_text} (not saving to conversation)"
+                        )
                         # Broadcast live status event
                         try:
                             targets = []
                             key = notebook_path or "*"
                             if key and key != "*":
-                                targets = list(chat_broadcaster._subscribers.get(key, set()))
+                                targets = list(
+                                    chat_broadcaster._subscribers.get(key, set())
+                                )
                             else:
-                                targets = list(chat_broadcaster._subscribers.get("*", set()))
-                            logger.debug(f"WS about to broadcast STATUS to recipients={len(targets)} path={key}")
+                                targets = list(
+                                    chat_broadcaster._subscribers.get("*", set())
+                                )
+                            logger.debug(
+                                f"WS about to broadcast STATUS to recipients={len(targets)} path={key}"
+                            )
                             chat_broadcaster.broadcast(
                                 {
                                     "type": item.get("type") or "status",
@@ -529,10 +646,9 @@ class ChatStatusHandler(APIHandler):
                                     "thread_id": item.get("thread_id"),
                                     "tool_call_id": item.get("tool_call_id"),
                                     "timestamp": item.get("timestamp")
-                                    or datetime.utcnow().isoformat() + 'Z',
+                                    or datetime.utcnow().isoformat() + "Z",
                                     "payload": {
-                                        "status": item.get("status")
-                                        or "working",
+                                        "status": item.get("status") or "working",
                                         "message": msg_text,
                                     },
                                 }
@@ -573,7 +689,9 @@ class ChatMessageHandler(APIHandler):
                     notebook_path = item.get("notebook_path")
                     message_text = item.get("content") or item.get("message") or ""
                     thread_id = item.get("thread_id")  # Extract thread_id from request
-                    thread_title = item.get("thread_title")  # Extract thread_title from request
+                    thread_title = item.get(
+                        "thread_title"
+                    )  # Extract thread_title from request
                     if not notebook_path:
                         # Resolve notebook path from active sessions
                         import aiohttp
@@ -589,7 +707,10 @@ class ChatMessageHandler(APIHandler):
                                     data_sess = await resp.json()
                                     if isinstance(data_sess, dict):
                                         sessions = data_sess.get("sessions", [])
-                                        if isinstance(sessions, list) and len(sessions) > 0:
+                                        if (
+                                            isinstance(sessions, list)
+                                            and len(sessions) > 0
+                                        ):
                                             notebook_path = sessions[0].get("path")
                     if notebook_path and message_text:
                         # Save assistant message to YDoc metadata (atomic with title update)
@@ -606,10 +727,16 @@ class ChatMessageHandler(APIHandler):
                             targets = []
                             key = notebook_path or "*"
                             if key and key != "*":
-                                targets = list(chat_broadcaster._subscribers.get(key, set()))
+                                targets = list(
+                                    chat_broadcaster._subscribers.get(key, set())
+                                )
                             else:
-                                targets = list(chat_broadcaster._subscribers.get("*", set()))
-                            logger.debug(f"WS about to broadcast MESSAGE to recipients={len(targets)} path={key}")
+                                targets = list(
+                                    chat_broadcaster._subscribers.get("*", set())
+                                )
+                            logger.debug(
+                                f"WS about to broadcast MESSAGE to recipients={len(targets)} path={key}"
+                            )
                             chat_broadcaster.broadcast(
                                 {
                                     "type": "message",
@@ -617,7 +744,7 @@ class ChatMessageHandler(APIHandler):
                                     "thread_id": item.get("thread_id"),
                                     "tool_call_id": item.get("tool_call_id"),
                                     "timestamp": item.get("timestamp")
-                                    or datetime.utcnow().isoformat() + 'Z',
+                                    or datetime.utcnow().isoformat() + "Z",
                                     "payload": {
                                         "role": "assistant",
                                         "content": message_text,
@@ -640,33 +767,35 @@ class ChatMessageHandler(APIHandler):
 
 class ChatThreadsHandler(APIHandler):
     """Handler for getting conversation threads"""
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.conversation_manager = ConversationManager(self.serverapp)
-    
+
     def check_xsrf_cookie(self):
         """Disable XSRF check for this endpoint"""
         pass
-    
+
     @tornado.web.authenticated
     async def get(self):
         """Get conversation threads for a notebook with centralized thread selection logic"""
         try:
-            notebook_path = self.get_argument('notebook_path', None)
+            notebook_path = self.get_argument("notebook_path", None)
             if not notebook_path:
                 self.set_status(400)
                 self.finish({"error": "notebook_path parameter required"})
                 return
-            
-            conversations = await self.conversation_manager.load_conversation_history(notebook_path)
+
+            conversations = await self.conversation_manager.load_conversation_history(
+                notebook_path
+            )
             all_threads = conversations.get("threads", {})
-            
+
             # Build thread summaries with centralized logic
             thread_summaries = []
             most_recent_thread_id = None
             most_recent_time = 0
-            
+
             for thread_id, thread_data in all_threads.items():
                 # Filter out status messages for accurate message count using metadata
                 messages = thread_data.get("messages", [])
@@ -676,46 +805,56 @@ class ChatThreadsHandler(APIHandler):
                     message_type = msg.get("metadata", {}).get("messageType")
                     if message_type != "status":
                         conversation_messages.append(msg)
-                
+
                 # Get thread metadata
                 title = thread_data.get("title", "Untitled")
-                last_updated = thread_data.get("last_updated", thread_data.get("created", ""))
+                last_updated = thread_data.get(
+                    "last_updated", thread_data.get("created", "")
+                )
                 created = thread_data.get("created", "")
-                
+
                 # Calculate most recent thread
                 if last_updated:
                     try:
-                        update_time = datetime.fromisoformat(last_updated.replace('Z', '+00:00')).timestamp()
+                        update_time = datetime.fromisoformat(
+                            last_updated.replace("Z", "+00:00")
+                        ).timestamp()
                         if update_time > most_recent_time:
                             most_recent_time = update_time
                             most_recent_thread_id = thread_id
                     except Exception:
                         pass
-                
-                thread_summaries.append({
-                    "id": thread_id,
-                    "title": title,
-                    "message_count": len(conversation_messages),
-                    "last_updated": last_updated,
-                    "created": created,
-                    "messages": conversation_messages  # Filtered messages for frontend
-                })
-            
+
+                thread_summaries.append(
+                    {
+                        "id": thread_id,
+                        "title": title,
+                        "message_count": len(conversation_messages),
+                        "last_updated": last_updated,
+                        "created": created,
+                        "messages": conversation_messages,  # Filtered messages for frontend
+                    }
+                )
+
             # Sort threads by last_updated (most recent first)
             thread_summaries.sort(key=lambda x: x.get("last_updated", ""), reverse=True)
-            
+
             # Use most recent thread if no active thread specified
-            selected_thread_id = most_recent_thread_id or conversations.get("active_thread")
-            
+            selected_thread_id = most_recent_thread_id or conversations.get(
+                "active_thread"
+            )
+
             response = {
                 "threads": thread_summaries,
                 "selected_thread_id": selected_thread_id,
-                "total_threads": len(thread_summaries)
+                "total_threads": len(thread_summaries),
             }
-            
-            logger.info(f"📚 Returning {len(thread_summaries)} threads for {notebook_path}, selected: {selected_thread_id}")
+
+            logger.info(
+                f"📚 Returning {len(thread_summaries)} threads for {notebook_path}, selected: {selected_thread_id}"
+            )
             self.finish(response)
-            
+
         except Exception as e:
             logger.error(f"Error getting conversation threads: {e}")
             self.set_status(500)
@@ -747,11 +886,15 @@ class ChatThreadTitleHandler(APIHandler):
                 self.finish({"error": "title and notebook_path are required"})
                 return
 
-            logger.info(f"💾 Saving thread title: '{title}' for notebook: {notebook_path}, thread: {thread_id}")
+            logger.info(
+                f"💾 Saving thread title: '{title}' for notebook: {notebook_path}, thread: {thread_id}"
+            )
 
             # Load current conversations
-            conversations = await self.conversation_manager.load_conversation_history(notebook_path)
-            
+            conversations = await self.conversation_manager.load_conversation_history(
+                notebook_path
+            )
+
             # Find the thread to update (use most recent if no thread_id specified)
             target_thread_id = thread_id
             if not target_thread_id:
@@ -762,23 +905,35 @@ class ChatThreadTitleHandler(APIHandler):
                     last_updated = thread_data.get("last_updated", "")
                     if last_updated:
                         try:
-                            update_time = datetime.fromisoformat(last_updated.replace('Z', '+00:00')).timestamp()
+                            update_time = datetime.fromisoformat(
+                                last_updated.replace("Z", "+00:00")
+                            ).timestamp()
                             if update_time > most_recent_time:
                                 most_recent_time = update_time
                                 target_thread_id = tid
                         except Exception:
                             pass
 
-            if target_thread_id and target_thread_id in conversations.get("threads", {}):
+            if target_thread_id and target_thread_id in conversations.get(
+                "threads", {}
+            ):
                 # Update thread title
                 conversations["threads"][target_thread_id]["title"] = title
-                conversations["threads"][target_thread_id]["last_updated"] = datetime.utcnow().isoformat() + 'Z'
-                
+                conversations["threads"][target_thread_id]["last_updated"] = (
+                    datetime.utcnow().isoformat() + "Z"
+                )
+
                 # Save updated conversations
-                await self.conversation_manager._save_conversations_to_notebook(notebook_path, conversations)
-                
-                logger.info(f"✅ Thread title saved: '{title}' for thread {target_thread_id}")
-                self.finish({"status": "success", "thread_id": target_thread_id, "title": title})
+                await self.conversation_manager._save_conversations_to_notebook(
+                    notebook_path, conversations
+                )
+
+                logger.info(
+                    f"✅ Thread title saved: '{title}' for thread {target_thread_id}"
+                )
+                self.finish(
+                    {"status": "success", "thread_id": target_thread_id, "title": title}
+                )
             else:
                 logger.warning(f"Thread not found: {target_thread_id}")
                 self.set_status(404)
@@ -803,22 +958,24 @@ class ChatToolsHandler(APIHandler):
         try:
             # Get actual bound tools from agent - THE REAL SOURCE OF TRUTH
             from jupyter_agent_lg.agent import JupyterAgent
-            
+
             # Create a temporary agent to get tool info
             # This ensures we get the EXACT same tools that are actually bound
             server_url = f"http://localhost:{self.serverapp.port}"
             token = self.serverapp.token
-            
+
             # Create agent with minimal config just to get tool info
             # Use a real API key if available, otherwise use dummy (tools are created regardless)
-            openai_key = os.environ.get('OPENAI_API_KEY', 'dummy-key-for-tool-detection')
+            openai_key = os.environ.get(
+                "OPENAI_API_KEY", "dummy-key-for-tool-detection"
+            )
             temp_agent = JupyterAgent(
                 server_url=server_url,
                 token=token,
                 openai_api_key=openai_key,
-                default_notebook_path="temp.ipynb"
+                default_notebook_path="temp.ipynb",
             )
-            
+
             # Get the REAL tool info from the agent
             try:
                 tool_info = temp_agent.get_tool_info()
@@ -827,12 +984,19 @@ class ChatToolsHandler(APIHandler):
             except Exception as e:
                 logger.error(f"🔧 Error getting tool info from agent: {e}")
                 # Fallback to basic tools
-                self.finish({
-                    "categories": ["Jupyter Notebook Tools"],
-                    "tools": {"Jupyter Notebook Tools": ["insert_and_execute_cell", "delete_cell"]},
-                    "total_tools": 2
-                })
-            
+                self.finish(
+                    {
+                        "categories": ["Jupyter Notebook Tools"],
+                        "tools": {
+                            "Jupyter Notebook Tools": [
+                                "insert_and_execute_cell",
+                                "delete_cell",
+                            ]
+                        },
+                        "total_tools": 2,
+                    }
+                )
+
         except Exception as e:
             logger.error(f"Error getting tools info: {e}")
             self.set_status(500)
@@ -851,13 +1015,15 @@ class ChatCancelHandler(APIHandler):
         """Handle cancellation requests"""
         try:
             logger.info("🛑 Cancellation request received")
-            
+
             # Cancel any currently running agent task
             if ChatAgentHandler._shared_agent:
                 cancelled = ChatAgentHandler._shared_agent.cancel_current_task()
                 if cancelled:
                     logger.info("🛑 Successfully cancelled agent task")
-                    self.finish({"status": "success", "message": "Agent task cancelled"})
+                    self.finish(
+                        {"status": "success", "message": "Agent task cancelled"}
+                    )
                 else:
                     logger.info("ℹ️ No agent task to cancel")
                     self.finish({"status": "success", "message": "No task to cancel"})
@@ -868,6 +1034,7 @@ class ChatCancelHandler(APIHandler):
         except Exception as e:
             logger.error(f"Error in cancel handler: {e}")
             import traceback
+
             logger.error(f"Traceback: {traceback.format_exc()}")
 
             self.set_status(500)
@@ -888,26 +1055,178 @@ class ChatScrollHandler(APIHandler):
             data = self.get_json_body()
             notebook_path = data.get("notebook_path")
             cell_index = data.get("cell_index")
-            
+
             if not notebook_path or cell_index is None:
-                raise HTTPError(400, "Missing notebook_path or cell_index")
-            
+                raise tornado.web.HTTPError(400, "Missing notebook_path or cell_index")
+
             logger.info(f"📍 Scroll request: {notebook_path} -> cell {cell_index}")
-            
+
             # Broadcast scroll command using the same broadcaster as status messages
-            chat_broadcaster.broadcast({
-                "type": "scroll_to_cell",
-                "notebook_path": notebook_path,
-                "payload": {
-                    "cell_index": cell_index,
-                    "align": "center"
+            chat_broadcaster.broadcast(
+                {
+                    "type": "scroll_to_cell",
+                    "notebook_path": notebook_path,
+                    "payload": {"cell_index": cell_index, "align": "center"},
                 }
-            })
-            
+            )
+
             self.finish({"status": "success"})
-            
+
         except Exception as e:
             logger.error(f"❌ Scroll request failed: {e}")
+            self.set_status(500)
+            self.finish({"error": str(e)})
+
+
+class ChatPlanCardsHandler(APIHandler):
+    """Handler for receiving plan steps from agent and broadcasting to frontend"""
+
+    def check_xsrf_cookie(self):
+        """Disable XSRF check for this endpoint"""
+        pass
+
+    @tornado.web.authenticated
+    async def post(self):
+        """Receive plan steps from agent and broadcast to frontend via WebSocket"""
+        try:
+            data = self.get_json_body()
+            plan_steps = data.get("plan_steps", [])
+            notebook_path = data.get("notebook_path")
+            timestamp = data.get("timestamp")
+            thread_id = data.get("thread_id")  # Get thread_id from agent
+
+            if not plan_steps:
+                self.set_status(400)
+                self.finish({"error": "plan_steps are required"})
+                return
+
+            logger.info(
+                f"📋 Received plan with {len(plan_steps)} steps for notebook {notebook_path}"
+            )
+
+            # Store plan as user message in conversation history so LLM treats it as direct instructions
+            plan_content = "Final plan that needs to be implemented:\n\n"
+            for i, step in enumerate(plan_steps, 1):
+                title = step.get("title", f"Step {i}")
+                description = step.get("description", "")
+                plan_content += f"[CARD:{title}|{description}]\n"
+
+            plan_message = {
+                "role": "user",  # Changed from "assistant" to "user" so LLM pays attention
+                "content": plan_content.strip(),
+                "metadata": {"messageType": "plan"},
+            }
+
+            # Save plan message to conversation history
+            conversation_manager = ConversationManager(self.serverapp)
+            saved_thread_id = await conversation_manager.save_conversation_message(
+                notebook_path, plan_message, thread_id
+            )
+            logger.info(f"💾 Saved plan as user message in thread {saved_thread_id}")
+
+            # Broadcast plan cards to frontend via existing chat_broadcaster
+            chat_broadcaster.broadcast(
+                {
+                    "type": "plan_cards",
+                    "notebook_path": notebook_path or "*",
+                    "payload": {
+                        "plan_steps": plan_steps,
+                        "timestamp": timestamp or datetime.utcnow().isoformat(),
+                    },
+                }
+            )
+
+            self.finish(
+                {
+                    "status": "success",
+                    "steps_sent": len(plan_steps),
+                    "thread_id": saved_thread_id,
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Error in plan cards handler: {e}")
+            self.set_status(500)
+            self.finish({"error": str(e)})
+
+
+class ChatUpdatePlanMessageHandler(APIHandler):
+    """Handler for updating plan messages in conversation history"""
+
+    def check_xsrf_cookie(self):
+        """Disable XSRF check for this endpoint"""
+        pass
+
+    @tornado.web.authenticated
+    async def post(self):
+        """Update the most recent plan message in conversation history"""
+        try:
+            data = self.get_json_body()
+            notebook_path = data.get("notebook_path")
+            thread_id = data.get("thread_id")
+            plan_content = data.get("plan_content")
+
+            if not all([notebook_path, thread_id, plan_content]):
+                self.set_status(400)
+                self.finish(
+                    {"error": "notebook_path, thread_id, and plan_content are required"}
+                )
+                return
+
+            logger.info(f"📝 Updating plan message in thread {thread_id}")
+
+            # Load conversation history
+            conversation_manager = ConversationManager(self.serverapp)
+            conversations = await conversation_manager.load_conversation_history(
+                notebook_path
+            )
+
+            if thread_id not in conversations.get("threads", {}):
+                self.set_status(404)
+                self.finish({"error": f"Thread {thread_id} not found"})
+                return
+
+            # Find the most recent user message with messageType: "plan"
+            messages = conversations["threads"][thread_id].get("messages", [])
+            plan_message_index = None
+
+            for i in range(len(messages) - 1, -1, -1):  # Search backwards
+                message = messages[i]
+                if (
+                    message.get("role") == "user"
+                    and message.get("metadata", {}).get("messageType") == "plan"
+                ):
+                    plan_message_index = i
+                    break
+
+            if plan_message_index is None:
+                self.set_status(404)
+                self.finish({"error": "No plan message found in conversation history"})
+                return
+
+            # Update the plan message content
+            messages[plan_message_index]["content"] = plan_content
+            messages[plan_message_index]["timestamp"] = (
+                datetime.utcnow().isoformat() + "Z"
+            )
+
+            # Update thread timestamp
+            conversations["threads"][thread_id]["last_updated"] = (
+                datetime.utcnow().isoformat() + "Z"
+            )
+
+            # Save updated conversation
+            await conversation_manager._save_conversations_to_notebook(
+                notebook_path, conversations
+            )
+
+            logger.info(f"✅ Updated plan message in thread {thread_id}")
+            self.finish(
+                {"status": "success", "updated_message_index": plan_message_index}
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to update plan message: {e}")
             self.set_status(500)
             self.finish({"error": str(e)})
 
@@ -937,10 +1256,17 @@ class ChatConversationsHandler(APIHandler):
                 return
 
             if action == "clear_all":
-                success = await self.conversation_manager.clear_all_conversations(notebook_path)
-                
+                success = await self.conversation_manager.clear_all_conversations(
+                    notebook_path
+                )
+
                 if success:
-                    self.finish({"status": "success", "message": f"Cleared all conversations for {notebook_path}"})
+                    self.finish(
+                        {
+                            "status": "success",
+                            "message": f"Cleared all conversations for {notebook_path}",
+                        }
+                    )
                 else:
                     self.set_status(500)
                     self.finish({"error": "Failed to clear all conversations"})
@@ -972,11 +1298,18 @@ class ChatConversationsHandler(APIHandler):
                     self.set_status(400)
                     self.finish({"error": "thread_id is required for clear_messages"})
                     return
-                    
-                success = await self.conversation_manager.clear_thread_messages(notebook_path, thread_id)
-                
+
+                success = await self.conversation_manager.clear_thread_messages(
+                    notebook_path, thread_id
+                )
+
                 if success:
-                    self.finish({"status": "success", "message": f"Cleared messages from thread {thread_id}"})
+                    self.finish(
+                        {
+                            "status": "success",
+                            "message": f"Cleared messages from thread {thread_id}",
+                        }
+                    )
                 else:
                     self.set_status(500)
                     self.finish({"error": "Failed to clear thread messages"})
@@ -1002,10 +1335,17 @@ class ChatConversationsHandler(APIHandler):
                 self.finish({"error": "notebook_path and thread_id are required"})
                 return
 
-            success = await self.conversation_manager.delete_thread(notebook_path, thread_id)
-            
+            success = await self.conversation_manager.delete_thread(
+                notebook_path, thread_id
+            )
+
             if success:
-                self.finish({"status": "success", "message": f"Deleted thread {thread_id} from {notebook_path}"})
+                self.finish(
+                    {
+                        "status": "success",
+                        "message": f"Deleted thread {thread_id} from {notebook_path}",
+                    }
+                )
             else:
                 self.set_status(500)
                 self.finish({"error": "Failed to delete thread"})
@@ -1016,11 +1356,9 @@ class ChatConversationsHandler(APIHandler):
             self.finish({"error": str(e)})
 
 
-
-
 class ChatAgentHandler(APIHandler):
     """Handler for agent chat requests with multi-LLM provider support"""
-    
+
     # Class-level shared agent for cancellation support
     _shared_agent = None
 
@@ -1035,7 +1373,9 @@ class ChatAgentHandler(APIHandler):
 
     async def post(self):
         """Handle POST requests to /api/chat/openai"""
-        logger.info("🚨🚨🚨 CHAT HANDLER CALLED - VERSION 4 - TESTING PYTHON RELOAD! 🚨🚨🚨")
+        logger.info(
+            "🚨🚨🚨 CHAT HANDLER CALLED - VERSION 4 - TESTING PYTHON RELOAD! 🚨🚨🚨"
+        )
         logger.info("🔍 IMMEDIATE NEXT LINE AFTER CHAT HANDLER CALLED")
         logger.info("🔍 ENTERING POST METHOD")
         request_start = time.time()
@@ -1046,7 +1386,9 @@ class ChatAgentHandler(APIHandler):
             # Parse request body
             parse_start = time.time()
             logger.debug(f"RAW REQUEST BODY: {self.request.body}")
-            logger.debug(f"Raw body bytes: {len(self.request.body) if self.request.body else 0}")
+            logger.debug(
+                f"Raw body bytes: {len(self.request.body) if self.request.body else 0}"
+            )
             body = json.loads(self.request.body)
             logger.debug("PARSED BODY SUCCESS")
             message = body.get("message", "")
@@ -1056,6 +1398,11 @@ class ChatAgentHandler(APIHandler):
             context = body.get("context", {})
             notebook_path = context.get("notebook_path")
             logger.info(f"notebook_path (from frontend context): {notebook_path}")
+
+            # DEBUG: Log the entire context to see what we're receiving
+            logger.info(f"🔍 DEBUG: Full context received: {context}")
+            plan_cards_debug = context.get("plan_cards")
+            logger.info(f"🔍 DEBUG: plan_cards in context: {plan_cards_debug}")
             thread_id = body.get("thread_id")
 
             # TRUST FRONTEND: Only fall back to sessions if frontend sends null/empty
@@ -1075,78 +1422,113 @@ class ChatAgentHandler(APIHandler):
                                 sessions = data.get("sessions", [])
                                 if len(sessions) >= 1:
                                     notebook_path = sessions[0].get("path")
-                                    logger.info(f"🧭 Fallback: resolved notebook_path from sessions: {notebook_path} (from {len(sessions)} sessions)")
+                                    logger.info(
+                                        f"🧭 Fallback: resolved notebook_path from sessions: {notebook_path} (from {len(sessions)} sessions)"
+                                    )
                                 else:
-                                    logger.warning("🧭 No active sessions found, using Untitled.ipynb as last resort")
+                                    logger.warning(
+                                        "🧭 No active sessions found, using Untitled.ipynb as last resort"
+                                    )
                                     notebook_path = "Untitled.ipynb"
                 except Exception as e:
-                    logger.warning(f"Failed to resolve notebook path from sessions: {e}")
-                    notebook_path = "Untitled.ipynb"  # Only fallback to Untitled as last resort
+                    logger.warning(
+                        f"Failed to resolve notebook path from sessions: {e}"
+                    )
+                    notebook_path = (
+                        "Untitled.ipynb"  # Only fallback to Untitled as last resort
+                    )
 
             # Removed cold start clearing - conversations should persist across restarts
             chat_mode = body.get("chat_mode", "auto")  # auto, langgraph, openai_agents
             parse_time = time.time() - parse_start
             logger.info(f"⚡ Request parsing took {parse_time:.3f}s")
-            logger.info(f"🎯 USING MODEL: {model}, PROVIDER: {provider}, MODE: {chat_mode}")
+            logger.info(
+                f"🎯 USING MODEL: {model}, PROVIDER: {provider}, MODE: {chat_mode}"
+            )
             logger.debug(f"FULL REQUEST BODY: {json.dumps(body, indent=2)}")
-            logger.info(f"🎯 FINAL notebook_path: {notebook_path} (frontend should provide active notebook, not random session)")
+            logger.info(
+                f"🎯 FINAL notebook_path: {notebook_path} (frontend should provide active notebook, not random session)"
+            )
 
             # Load conversation history
             history_start = time.time()
             conversation_context = []
             active_thread_id = None
-            # Always load conversation history (no more boot clearing)
-            conversations = (
-                await self.conversation_manager.load_conversation_history(
-                    notebook_path
-                )
+
+            # Always load conversation history first
+            conversations = await self.conversation_manager.load_conversation_history(
+                notebook_path
             )
-            
+
+            # Check for plan updates in the request and handle them synchronously
+            plan_cards = context.get("plan_cards")
+            if plan_cards and len(plan_cards) > 0:
+                logger.info(f"📋 Processing plan update with {len(plan_cards)} cards")
+                await self._handle_plan_update_sync(
+                    notebook_path, context.get("thread_id"), plan_cards, conversations
+                )
+
             # Log all available threads for debugging
             all_threads = conversations.get("threads", {})
             thread_count = len(all_threads)
-            logger.info(f"📚 Found {thread_count} conversation threads in {notebook_path}")
-            
+            logger.info(
+                f"📚 Found {thread_count} conversation threads in {notebook_path}"
+            )
+
             if thread_count > 0:
                 for tid, thread_data in all_threads.items():
                     message_count = len(thread_data.get("messages", []))
                     created = thread_data.get("created_at", "unknown")
-                    logger.info(f"  📝 Thread {tid[:8]}... has {message_count} messages (created: {created})")
-            
+                    logger.info(
+                        f"  📝 Thread {tid[:8]}... has {message_count} messages (created: {created})"
+                    )
+
             # Frontend always provides thread_id - use it directly
             thread_id = context.get("thread_id")
             all_threads = conversations.get("threads", {})
-            
+
             if thread_id:
                 # Frontend provided thread ID - always use it (create if doesn't exist)
                 active_thread_id = thread_id
                 if thread_id in all_threads:
-                    logger.info(f"🎯 Using existing thread ID from frontend: {active_thread_id}")
+                    logger.info(
+                        f"🎯 Using existing thread ID from frontend: {active_thread_id}"
+                    )
                 else:
-                    logger.info(f"🆕 Creating new thread with frontend-provided ID: {active_thread_id}")
+                    logger.info(
+                        f"🆕 Creating new thread with frontend-provided ID: {active_thread_id}"
+                    )
             else:
                 # Fallback: if no thread_id provided, find most recent thread (backward compatibility)
                 # Find most recent thread based on last_updated timestamp
                 most_recent_thread_id = conversations.get("active_thread")
                 most_recent_time = 0
-                
+
                 for tid, thread_data in all_threads.items():
                     last_updated = thread_data.get("last_updated")
                     if last_updated:
                         try:
-                            update_time = datetime.fromisoformat(last_updated.replace('Z', '+00:00')).timestamp()
+                            update_time = datetime.fromisoformat(
+                                last_updated.replace("Z", "+00:00")
+                            ).timestamp()
                             if update_time > most_recent_time:
                                 most_recent_time = update_time
                                 most_recent_thread_id = tid
                         except Exception:
                             pass
-                
+
                 active_thread_id = most_recent_thread_id
-                logger.info(f"🎯 Using most recent thread ID: {active_thread_id} (was suggested: {conversations.get('active_thread')})")
-            
-            if active_thread_id and active_thread_id in conversations.get("threads", {}):
-                thread_messages = conversations["threads"][active_thread_id].get("messages", [])
-                
+                logger.info(
+                    f"🎯 Using most recent thread ID: {active_thread_id} (was suggested: {conversations.get('active_thread')})"
+                )
+
+            if active_thread_id and active_thread_id in conversations.get(
+                "threads", {}
+            ):
+                thread_messages = conversations["threads"][active_thread_id].get(
+                    "messages", []
+                )
+
                 # Filter out status messages - only use real conversation messages for context
                 filtered_messages = []
                 for msg in thread_messages:
@@ -1154,19 +1536,27 @@ class ChatAgentHandler(APIHandler):
                     message_type = msg.get("metadata", {}).get("messageType")
                     if message_type != "status":
                         filtered_messages.append(msg)
-                
+
                 conversation_context = filtered_messages[-100:]
-                logger.info(f"✅ Loaded {len(thread_messages)} total messages, filtered to {len(filtered_messages)} conversation messages, using last {len(conversation_context)} for context")
-                
+                logger.info(
+                    f"✅ Loaded {len(thread_messages)} total messages, filtered to {len(filtered_messages)} conversation messages, using last {len(conversation_context)} for context"
+                )
+
                 # Log first and last conversation messages for verification
                 if len(filtered_messages) > 0:
                     first_msg = filtered_messages[0]
                     last_msg = filtered_messages[-1]
-                    logger.info(f"  📖 First conversation message: {first_msg.get('role', 'unknown')} - {first_msg.get('content', '')[:100]}...")
+                    logger.info(
+                        f"  📖 First conversation message: {first_msg.get('role', 'unknown')} - {first_msg.get('content', '')[:100]}..."
+                    )
                     if len(filtered_messages) > 1:
-                        logger.info(f"  📖 Last conversation message: {last_msg.get('role', 'unknown')} - {last_msg.get('content', '')[:100]}...")
+                        logger.info(
+                            f"  📖 Last conversation message: {last_msg.get('role', 'unknown')} - {last_msg.get('content', '')[:100]}..."
+                        )
             else:
-                logger.info(f"❌ No active thread found or thread {active_thread_id} doesn't exist - starting fresh conversation")
+                logger.info(
+                    f"❌ No active thread found or thread {active_thread_id} doesn't exist - starting fresh conversation"
+                )
 
             history_time = time.time() - history_start
             logger.info(f"⚡ History handling took {history_time:.3f}s")
@@ -1185,12 +1575,16 @@ class ChatAgentHandler(APIHandler):
             # CRITICAL FIX: Add current user message to conversation context
             # The agent needs to see the current user message to respond to it!
             conversation_context_with_current = conversation_context + [user_message]
-            logger.info(f"🔧 Added current user message to context: {len(conversation_context)} -> {len(conversation_context_with_current)} messages")
+            logger.info(
+                f"🔧 Added current user message to context: {len(conversation_context)} -> {len(conversation_context_with_current)} messages"
+            )
 
             # ALWAYS USE LANGGRAPH AGENT - NO FILTERING, NO FALLBACKS!
             logger.info("🤖 ALWAYS USING LANGGRAPH AGENT (no stupid filtering)")
             # Pass conversation context to agent for continuity
-            logger.info(f"📚 Passing {len(conversation_context_with_current)} messages as conversation context (including current user message)")
+            logger.info(
+                f"📚 Passing {len(conversation_context_with_current)} messages as conversation context (including current user message)"
+            )
             response = await self._run_langgraph_agent(
                 message,
                 notebook_path,
@@ -1228,6 +1622,152 @@ class ChatAgentHandler(APIHandler):
 
     # REMOVED: _should_use_langgraph - stupid filtering logic removed
     # ALL messages go to LangGraph agent, no exceptions!
+
+    async def _handle_plan_update_sync(
+        self, notebook_path: str, thread_id: str, plan_cards: list, conversations: dict
+    ):
+        """Handle plan updates synchronously within the same request"""
+        try:
+            logger.info(
+                f"🔍 DEBUG: _handle_plan_update_sync called with {len(plan_cards)} cards"
+            )
+
+            # Convert plan cards back to [CARD:title|description] format
+            plan_content = "Final plan that needs to be implemented:\n\n" + "\n".join(
+                [
+                    f"[CARD:{card.get('title', '')}|{card.get('description', '')}]"
+                    for card in plan_cards
+                ]
+            )
+
+            logger.info(f"🔍 DEBUG: Looking for plan message in thread {thread_id}")
+            logger.info(
+                f"🔍 DEBUG: Available threads: {list(conversations.get('threads', {}).keys())}"
+            )
+
+            if thread_id not in conversations.get("threads", {}):
+                logger.error(f"❌ Thread {thread_id} not found for plan update")
+                return
+
+            # Find the most recent user message with messageType: "plan"
+            messages = conversations["threads"][thread_id].get("messages", [])
+            logger.info(f"🔍 DEBUG: Thread {thread_id} has {len(messages)} messages")
+
+            plan_message_index = None
+            plan_messages_found = []
+
+            for i in range(len(messages) - 1, -1, -1):  # Search backwards
+                msg = messages[i]
+                msg_role = msg.get("role")
+                msg_type = msg.get("metadata", {}).get("messageType")
+                msg_content_preview = msg.get("content", "")[:50]
+                logger.info(
+                    f"🔍 DEBUG: Message {i}: role={msg_role}, messageType={msg_type}, content='{msg_content_preview}...'"
+                )
+
+                if msg_role == "user" and msg_type == "plan":
+                    plan_messages_found.append(i)
+                    if plan_message_index is None:  # Take the first (most recent) one
+                        plan_message_index = i
+                        logger.info(f"✅ Found most recent plan message at index {i}")
+
+            if len(plan_messages_found) > 1:
+                logger.warning(
+                    f"⚠️ Found {len(plan_messages_found)} plan messages at indices {plan_messages_found}, using most recent: {plan_message_index}"
+                )
+            elif len(plan_messages_found) == 1:
+                logger.info(
+                    f"✅ Found exactly 1 plan message at index {plan_message_index}"
+                )
+
+            if plan_message_index is None:
+                logger.error(f"❌ No plan message found in {len(messages)} messages")
+                return
+
+            # Update the plan message content
+            logger.info(f"🔄 Updating plan message at index {plan_message_index}")
+
+            try:
+                old_content = messages[plan_message_index].get("content", "")
+                logger.info(f"🔍 DEBUG: Old content length: {len(old_content)}")
+                logger.info(f"🔍 DEBUG: New content length: {len(plan_content)}")
+
+                logger.info("🔍 DEBUG: About to update message content...")
+                messages[plan_message_index]["content"] = plan_content
+                logger.info("✅ Message content updated")
+
+                logger.info("🔍 DEBUG: About to update timestamp...")
+                messages[plan_message_index]["timestamp"] = (
+                    datetime.utcnow().isoformat() + "Z"
+                )
+                logger.info("✅ Timestamp updated")
+
+                logger.info("🔍 DEBUG: About to update thread timestamp...")
+                conversations["threads"][thread_id]["last_updated"] = (
+                    datetime.utcnow().isoformat() + "Z"
+                )
+                logger.info("✅ Thread timestamp updated")
+
+                logger.info("🔍 DEBUG: About to save to notebook...")
+
+                # Verify what we're actually saving
+                save_content = conversations["threads"][thread_id]["messages"][
+                    plan_message_index
+                ]["content"]
+                save_card_count = save_content.count("[CARD:")
+                logger.info(
+                    f"🔍 DEBUG: Saving object with {save_card_count} cards, content preview: {save_content[:100]}..."
+                )
+
+                await self.conversation_manager._save_conversations_to_notebook(
+                    notebook_path, conversations
+                )
+                logger.info("✅ Save to notebook completed")
+
+                # Verify object still has updates after save
+                after_save_content = conversations["threads"][thread_id]["messages"][
+                    plan_message_index
+                ]["content"]
+                after_save_count = after_save_content.count("[CARD:")
+                logger.info(
+                    f"🔍 DEBUG: After save, object still has {after_save_count} cards"
+                )
+
+                # VERIFY: Read back from notebook file to see if it actually saved
+                logger.info(
+                    "🔍 DEBUG: Reading back from notebook file to verify save..."
+                )
+                fresh_conversations = (
+                    await self.conversation_manager.load_conversation_history(
+                        notebook_path
+                    )
+                )
+                fresh_plan_content = fresh_conversations["threads"][thread_id][
+                    "messages"
+                ][plan_message_index]["content"]
+                fresh_card_count = fresh_plan_content.count("[CARD:")
+                logger.info(
+                    f"🔍 DEBUG: Fresh read from file shows {fresh_card_count} cards"
+                )
+                logger.info(
+                    f"🔍 DEBUG: Fresh content preview: {fresh_plan_content[:100]}..."
+                )
+
+                logger.info(
+                    f"✅ Successfully updated plan message in thread {thread_id} and saved to metadata"
+                )
+
+            except Exception as inner_error:
+                logger.error(f"❌ Inner update failed at specific step: {inner_error}")
+                import traceback
+
+                logger.error(f"❌ Inner traceback: {traceback.format_exc()}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to handle plan update sync: {e}")
+            import traceback
+
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
 
     def _get_server_token(self) -> str:
         """Get server token for authentication"""
@@ -1460,7 +2000,7 @@ class ChatAgentHandler(APIHandler):
             )
 
             logger.info("🚀 STEP 8: CREATING/REUSING AGENT")
-            
+
             # Create or reuse agent
             if not ChatAgentHandler._shared_agent:
                 ChatAgentHandler._shared_agent = JupyterAgent(
@@ -1472,7 +2012,7 @@ class ChatAgentHandler(APIHandler):
                 logger.info("✅ New JupyterAgent created successfully")
             else:
                 logger.info("✅ Reusing existing JupyterAgent")
-            
+
             agent_instance = ChatAgentHandler._shared_agent
 
             logger.info("🚀 STEP 9: PROCESSING REQUEST")
@@ -1480,27 +2020,33 @@ class ChatAgentHandler(APIHandler):
             logger.info(f"📝 Model: {model}")
             logger.info(f"📝 Provider: {provider}")
             logger.info(f"📝 Notebook path: {notebook_path}")
-            logger.info(
-                f"📝 Conversation context length: {len(conversation_context)}"
-            )
+            logger.info(f"📝 Conversation context length: {len(conversation_context)}")
 
-            # Process request
+            # Process request with thread_id
             result = await asyncio.wait_for(
                 agent_instance.process_request(
-                    message, notebook_path, conversation_context, model, provider, mcp_servers_config, thread_id
+                    message,
+                    notebook_path,
+                    conversation_context,
+                    model,
+                    provider,
+                    mcp_servers_config,
+                    thread_id,
                 ),
-                timeout=300  # 5 minutes max
+                timeout=300,  # 5 minutes max
             )
-            
+
             logger.info(f"✅ LANGGRAPH AGENT RETURNED: {str(result)[:100]}...")
             logger.info("🚀 STEP 10: AGENT PROCESS REQUEST COMPLETED")
             logger.info(f"✅ RESULT TYPE: {type(result)}")
             logger.info(f"✅ RESULT LENGTH: {len(str(result))}")
-            
+
             return result
-            
+
         except asyncio.CancelledError:
-            logger.info("🛑 LangGraph agent execution cancelled by user - this is normal")
+            logger.info(
+                "🛑 LangGraph agent execution cancelled by user - this is normal"
+            )
             return "Task cancelled by user request"
         except asyncio.TimeoutError:
             logger.warning("⏰ LangGraph agent timed out after 5 minutes")
@@ -1590,33 +2136,28 @@ def _load_jupyter_server_extension(server_app):
     handlers = [
         # Main chat endpoint - handles user messages and runs LangGraph agent
         (r"/api/chat/openai", ChatAgentHandler),
-        
         # Status updates from agent (e.g., "Executing code...", "Plotting chart...")
         (r"/api/chat/status", ChatStatusHandler),
-        
         # Final messages from agent (assistant responses, completion notifications)
         (r"/api/chat/message", ChatMessageHandler),
-        
         # WebSocket stream for real-time chat events and status updates
         (r"/api/chat/stream", ChatStreamHandler),
-        
         # Thread management - load/save conversation history per notebook
         (r"/api/chat/threads", ChatThreadsHandler),
-        
         # Update thread titles (e.g., when agent completes a task)
         (r"/api/chat/thread-title", ChatThreadTitleHandler),
-        
         # Available tools/capabilities for the chat interface
         (r"/api/chat/tools", ChatToolsHandler),
-        
         # Cancel ongoing agent tasks (used for thread switching and interruptions)
         (r"/api/chat/cancel", ChatCancelHandler),
-        
         # Scroll commands from notebook tools (for auto-scrolling to executed cells)
         (r"/api/chat/scroll", ChatScrollHandler),
-        
         # Conversation management - clear all conversations, delete specific threads
         (r"/api/chat/conversations", ChatConversationsHandler),
+        # Plan cards from CreatePlan tool - broadcasts plan steps to frontend
+        (r"/api/chat/plan_cards", ChatPlanCardsHandler),
+        # Update plan message in conversation history when user edits cards
+        (r"/api/chat/update_plan_message", ChatUpdatePlanMessageHandler),
     ]
     server_app.web_app.add_handlers(".*$", handlers)
     server_app.log.info("JupyterLab Chat extension loaded with status endpoints")

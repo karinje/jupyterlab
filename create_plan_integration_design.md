@@ -245,7 +245,7 @@ def _format_plan_for_llm(self, plan_steps):
 
 ---
 
-## 🔄 **Complete Workflow**
+## 🔄 **Complete End-to-End Workflow**
 
 ### **Phase 1: Plan Creation**
 ```
@@ -253,41 +253,105 @@ User: "Create plots for x,y powers 1-10"
   ↓
 Agent (analyze_and_decide): Decides to create plan
   ↓
-Agent (tools): Executes CreatePlan tool
+Agent calls: CreatePlan([
+  {title: "Import libraries", description: "Import matplotlib and numpy"},
+  {title: "Create x values", description: "Generate x = np.linspace(0, 10, 100)"},
+  {title: "Plot x^1", description: "Plot y = x"},
+  {title: "Plot x^2", description: "Plot y = x^2"},
+  // ... up to x^10
+])
   ↓
-Backend: POST /api/chat/plan_cards → WebSocket broadcast (NEW)
+CreatePlan tool → display_plan_cards() → POST /api/chat/plan_cards (NEW)
   ↓
-Frontend: planReceived signal → _addMessageToDisplay() with messageType: 'plan' (EXISTS)
+ChatPlanCardsHandler → WebSocket broadcast (type: "plan_cards") (NEW)
   ↓
-Frontend: _renderCards() displays editable cards (EXISTS)
+Frontend service → planReceived signal → _addMessageToDisplay() (EXISTS)
   ↓
-Agent: Transitions to END node (waits for user response)
+ChatManager renders 10 editable cards using existing _renderCards() (EXISTS)
+  ↓
+Agent transitions to END (waits for user response)
 ```
 
-### **Phase 2: User Interaction**
+### **Phase 2: User Interaction & Plan Editing**
 ```
-User: Edits cards using existing contenteditable fields (EXISTS)
-User: Clicks + button to add steps (addStepAfterCard - EXISTS)
-User: Clicks 🗑️ to delete steps (deleteCard - EXISTS)
+User sees 10 plan cards displayed in chat
   ↓
-User: Types response "Yes, proceed but skip step 3"
+User edits cards:
+- Changes "Plot x^3" title to "Plot cubic function"
+- Deletes "Plot x^9" card using 🗑️ button (deleteCard - EXISTS)
+- Clicks + button to add "Save plots to file" after "Plot x^10" (addStepAfterCard - EXISTS)
   ↓
-Frontend: _collectCurrentPlanCards() extracts edited cards (NEW)
+User types: "Yes, proceed but make the plots bigger"
   ↓
-Frontend: Sends user message + updated_plan in context (NEW)
+Frontend _collectCurrentPlanCards() extracts 10 cards (9 original + 1 new) (NEW)
+  ↓
+Frontend sends message with context: {
+  message: "Yes, proceed but make the plots bigger",
+  context: {
+    notebook_path: "...",
+    updated_plan: [
+      {id: "...", title: "Import libraries", description: "..."},
+      {id: "...", title: "Plot cubic function", description: "..."},  // edited
+      // ... (x^9 missing - deleted)
+      {id: "...", title: "Save plots to file", description: "..."}    // added
+    ]
+  }
+} (NEW)
 ```
 
-### **Phase 3: Plan Implementation**
+### **Phase 3: Plan-Aware Execution**
 ```
-Backend: Includes updated_plan in agent context (NEW)
+Backend extracts updated_plan from context (NEW)
   ↓
-Agent: _format_plan_for_llm() adds plan to LLM context (NEW)
+Agent receives updated_plan in process_request() (NEW)
   ↓
-Agent (analyze_and_decide): Sees user response + current plan state
+Agent adds updated_plan to initial_state (NEW)
   ↓
-Agent: Decides to implement plan using existing insert_and_execute_cell
+Agent (analyze_and_decide): _format_plan_for_llm() adds plan to LLM context: (NEW)
+
+"Current Plan:
+--------
+1. ⏳ Import libraries - Import matplotlib and numpy
+2. ⏳ Create x values - Generate x = np.linspace(0, 10, 100)
+3. ⏳ Plot x^1 - Plot y = x
+4. ⏳ Plot cubic function - Plot y = x^3
+...
+9. ⏳ Save plots to file - Save plots to file
+
+Note: This plan was recently edited by the user. Use the updated version above."
   ↓
-Agent: Continues until plan complete or user interrupts
+LLM sees:
+- User message: "Yes, proceed but make the plots bigger"
+- Current plan state with user modifications
+- Notebook context
+  ↓
+LLM decides: "User wants to proceed with modified plan and make plots bigger"
+  ↓
+Agent calls: insert_and_execute_cell(
+  code="import matplotlib.pyplot as plt\nimport numpy as np\nplt.rcParams['figure.figsize'] = (12, 8)",
+  status_message="Setting up libraries with larger plot size"
+)
+  ↓
+Agent continues implementing the modified plan step by step
+```
+
+### **Phase 4: Continuous Plan Awareness**
+```
+On each subsequent turn:
+  ↓
+Agent sees current plan state in LLM context (NEW)
+  ↓
+Agent can mark steps as completed: step["completed"] = True
+  ↓
+LLM sees: "1. ✅ Import libraries - Import matplotlib and numpy"
+  ↓
+Agent continues with remaining ⏳ steps
+  ↓
+User can interrupt: "Stop after step 5"
+  ↓
+Agent sees updated user request + current plan progress
+  ↓
+Agent decides to stop and mark remaining steps as skipped
 ```
 
 ---
@@ -365,3 +429,63 @@ Agent: Continues until plan complete or user interrupts
 4. **Plan context integration** in agent decisions
 
 **Total implementation: ~3-4 new methods leveraging existing robust card system.**
+
+---
+
+## ✅ **IMPLEMENTATION COMPLETE - REVISED ARCHITECTURE**
+
+### **🔄 MAJOR ARCHITECTURE CHANGE:**
+**From:** Plan in system prompt (broken sequence context)
+**To:** Plan as conversation messages (natural sequence flow)
+
+### **New Architecture Benefits:**
+- ✅ **Natural Conversation Flow** - Plans stored as assistant messages preserve timeline
+- ✅ **Sequence Awareness** - LLM understands request → plan → edits → new request naturally
+- ✅ **Plan Persistence** - Plans survive conversation reloads
+- ✅ **Edit Tracking** - User modifications update conversation history
+- ✅ **Timeline Context** - LLM knows if user request came before/after plan
+
+### **What Was Built:**
+
+#### **Backend Components:**
+1. **ChatPlanCardsHandler** - Receives plan steps and broadcasts via WebSocket
+2. **Plan Message Storage** - Stores plans as assistant messages in conversation history
+3. **Plan Message Updates** - Updates existing plan messages when user edits cards
+4. **Plan Context Removal** - Removed plan from system prompt entirely
+
+#### **Frontend Components:**
+1. **WebSocket Plan Cards Handler** - Displays plan cards in chat
+2. **Plan Collection Method** - Collects edited cards and updates conversation
+3. **Plan Message Rendering** - Renders plan cards from conversation history on reload
+4. **Card UI Improvements** - Single-line format, smaller subtle buttons
+
+#### **Agent Integration:**
+1. **Enhanced System Prompt** - Comprehensive plan management instructions
+2. **Conversation-Based Planning** - LLM reads plans from conversation history
+3. **Natural Decision Making** - Follows conversation sequence for plan decisions
+4. **Plan Precedence Rules** - Clear rules for when to create vs implement plans
+
+### **New Workflow:**
+```
+User: "Create plots for x,y powers 1-10"
+Agent: Calls CreatePlan → Plan stored as assistant message with cards
+User: [Edits cards, deletes 5 steps]
+User: "proceed"
+Backend: Updates the assistant plan message with edited 5 steps
+Agent: Reads updated plan from conversation → Implements 5 steps
+```
+
+### **Key Benefits Achieved:**
+- ✅ **Sequence Context Preserved** - LLM understands conversation timeline
+- ✅ **Natural Plan Management** - No artificial system prompt rules
+- ✅ **Persistent Plan State** - Plans survive page reloads
+- ✅ **Clean Conversation Flow** - Single source of truth for active plan
+- ✅ **User Edit Integration** - Modifications seamlessly update conversation
+
+### **Files Modified:**
+- `packages/chat/jupyterlab_chat/__init__.py` - Plan message storage and updates
+- `packages/chat/src/service.ts` - Plan collection and conversation integration
+- `packages/chat/src/widget.tsx` - Improved card UI and conversation rendering
+- `packages/jupyter-agent/jupyter_agent_lg/agent.py` - Enhanced system prompt, removed plan context
+
+**Architecture is now robust and natural! 🚀**
