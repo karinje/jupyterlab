@@ -647,7 +647,7 @@ export class ChatManager {
 
   private _renderCards(cards: any[]): string {
     return `
-      <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="display: flex; flex-direction: column; gap: 2px;">
         ${cards.map((card, index) => this._renderCard(card, index)).join('')}
       </div>
     `;
@@ -658,35 +658,35 @@ export class ChatManager {
       <div id="${card.id}" class="chat-card" style="
         background: white;
         border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 12px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border-radius: 6px;
+        padding: 6px 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         position: relative;
         width: 100%;
-        margin-bottom: 8px;
+        margin-bottom: 2px;
       ">
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <div class="card-content" contenteditable="true" style="
             flex: 1;
             min-width: 0;
-              font-size: 14px;
-              color: #333;
-              line-height: 1.4;
-              outline: none;
-              border: 1px solid transparent;
-            padding: 6px 8px;
-              border-radius: 4px;
-            margin-right: 8px;
+            font-size: 13px;
+            color: #333;
+            line-height: 1.3;
+            outline: none;
+            border: 1px solid transparent;
+            padding: 2px 4px;
+            border-radius: 3px;
+            margin-right: 6px;
           "><span class="card-title" style="font-weight: 600;">${card.title}</span>: <span class="card-description">${card.description}</span></div>
-          <div style="display: flex; gap: 4px;">
+          <div style="display: flex; gap: 3px;">
             <button class="add-step-btn" onclick="window.chatManager.addStepAfterCard('${card.id}')" style="
               background: #e0e0e0;
               color: #666;
               border: none;
               border-radius: 50%;
-              width: 20px;
-              height: 20px;
-              font-size: 14px;
+              width: 18px;
+              height: 18px;
+              font-size: 12px;
               cursor: pointer;
               display: flex;
               align-items: center;
@@ -699,9 +699,9 @@ export class ChatManager {
               color: #666;
               border: none;
               border-radius: 50%;
-              width: 20px;
-              height: 20px;
-              font-size: 14px;
+              width: 18px;
+              height: 18px;
+              font-size: 12px;
               cursor: pointer;
               display: flex;
               align-items: center;
@@ -742,7 +742,7 @@ export class ChatManager {
 
   deleteCard(cardId: string): void {
     const cardElement = document.getElementById(cardId);
-    if (cardElement && confirm('Are you sure you want to delete this card?')) {
+    if (cardElement) {
       cardElement.remove();
     }
   }
