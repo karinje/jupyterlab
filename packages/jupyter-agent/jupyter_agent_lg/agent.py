@@ -1319,8 +1319,8 @@ Current Iteration: {state.get("current_iteration", 0)}"""
                 # Include any other cell types with FULL content
                 summary += f"Index {i}: {cell_type} cell\n{source}\n\n"
 
-        # Debug: Log the actual notebook summary being sent to LLM
-        logger.info(f"📋 [_summarize_notebook] Summary for LLM: {summary[:500]}...")
+        # Debug: Log the COMPLETE notebook summary being sent to LLM (no truncation)
+        logger.info(f"📋 [_summarize_notebook] COMPLETE Summary for LLM:\n{summary}")
 
         return summary
 

@@ -67,11 +67,10 @@ class DeleteCellArgs(BaseModel):
 
 
 class UpdateCellArgs(BaseModel):
-    """Arguments for update_cell tool"""
+    """Arguments for update_and_execute_cell tool"""
 
     cell_index: int = Field(description="Index of the cell to update (0-based)")
-    source: Optional[str] = Field(default=None, description="New source content for the cell")
-    metadata: Optional[dict] = Field(default=None, description="New metadata for the cell")
+    source: str = Field(description="New source code for the cell (will be executed after update)")
     status_message: Optional[str] = Field(
         default=None,
         description="Brief status message describing what you're updating (e.g., 'Fixing code error in analysis')"

@@ -107,33 +107,62 @@ def create_jupyter_tools(
             tool_logger.error(f"Error deleting cell: {e}")
             return f"Error: {str(e)}"
 
-    async def update_cell(cell_index: int, source: str = None, metadata: dict = None, status_message: str = None) -> str:
-        """Update a cell's content or metadata"""
+    async def update_and_execute_cell(cell_index: int, source: str, status_message: str = None) -> str:
+        """Update a cell's source code and execute it"""
         try:
             # Send status update if provided
             if status_message:
                 await send_status(status_message)
             
-            tool_logger.info(f"🔧 TOOL CALLED: update_cell for cell {cell_index}")
-            result = await jupyter_tools_client.update_cell(
+            tool_logger.info(f"🔧 TOOL CALLED: update_and_execute_cell for cell {cell_index}")
+            
+            # Step 1: Update the cell source
+            update_result = await jupyter_tools_client.update_cell(
                 notebook_path=notebook_path, 
                 index=cell_index, 
-                source=source, 
-                metadata=metadata
+                source=source
             )
-            status = result.get("status", "unknown")
-            updated_index = result.get("updated_index", cell_index)
-            if status == "ok" or status == "success":
-                changes = []
-                if source is not None:
-                    changes.append("source")
-                if metadata is not None:
-                    changes.append("metadata")
-                change_desc = " and ".join(changes) if changes else "content"
-                return f"Cell {updated_index} {change_desc} updated successfully"
-            return f"Failed to update cell {updated_index}: {result}"
+            
+            if update_result.get("status") not in ["ok", "success"]:
+                return f"Failed to update cell {cell_index}: {update_result}"
+            
+            tool_logger.info(f"🔧 Cell {cell_index} source updated, now executing...")
+            
+            # Step 2: Execute the updated cell (same logic as insert_and_execute_cell)
+            # Get kernel_id from session
+            kernel_id = None
+            try:
+                sessions_response = await jupyter_tools_client.session.get(
+                    f"{jupyter_tools_client.base_url}/api/sessions",
+                    headers=jupyter_tools_client._get_headers()
+                )
+                if sessions_response.status == 200:
+                    sessions_data = await sessions_response.json()
+                    for session in sessions_data:
+                        if session.get("path") == notebook_path:
+                            kernel_id = session.get("kernel", {}).get("id")
+                            break
+            except Exception as e:
+                tool_logger.warning(f"Could not get kernel_id: {e}")
+            
+            if not kernel_id:
+                return f"Cell {cell_index} source updated but could not execute (no kernel found)"
+            
+            # Execute the cell
+            exec_result = await jupyter_tools_client.execute_cell(
+                notebook_path=notebook_path,
+                kernel_id=kernel_id,
+                index=cell_index
+            )
+            
+            exec_count = exec_result.get("execution_count")
+            outputs_count = exec_result.get("outputs_count", 0)
+            
+            tool_logger.info(f"🔧 ✅ Cell {cell_index} updated and executed (#{exec_count})")
+            return f"Cell {cell_index} source updated successfully. Code executed successfully. execution_count={exec_count}, outputs_count={outputs_count}"
+            
         except Exception as e:
-            tool_logger.error(f"Error updating cell: {e}")
+            tool_logger.error(f"Error updating/executing cell: {e}")
             return f"Error: {str(e)}"
 
     async def insert_markdown(markdown: str, position: str = "end", status_message: str = None) -> str:
@@ -187,18 +216,18 @@ Verify cell index carefully to avoid deleting wrong content.""",
             coroutine=delete_cell,
         ),
         StructuredTool.from_function(
-            func=update_cell,
-            name="update_cell",
-            description="""Update existing cell content or metadata. Use for:
-- Modifying code in existing cells
+            func=update_and_execute_cell,
+            name="update_and_execute_cell",
+            description="""Update existing cell source code and execute it. Use for:
+- Modifying code in existing cells and seeing new results
 - Fixing errors in previously written code
-- Updating cell metadata or properties
-- Replacing cell content without changing execution order
+- Changing analysis parameters and re-running
+- Iterating on visualizations or computations
 
-Specify either source (for content) or metadata (for cell properties).
+The cell source is updated, then immediately executed to show new outputs.
 Use cell index to target the specific cell to update.""",
             args_schema=UpdateCellArgs,
-            coroutine=update_cell,
+            coroutine=update_and_execute_cell,
         ),
         StructuredTool.from_function(
             func=insert_markdown,
