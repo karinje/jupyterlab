@@ -788,14 +788,33 @@ class ChatThreadsHandler(APIHandler):
             most_recent_time = 0
 
             for thread_id, thread_data in all_threads.items():
-                # Filter out status messages for accurate message count using metadata
+                # Filter messages to match frontend display logic
                 messages = thread_data.get("messages", [])
                 conversation_messages = []
                 for msg in messages:
-                    # Use metadata to filter out status messages instead of content matching
                     message_type = msg.get("metadata", {}).get("messageType")
-                    if message_type != "status":
-                        conversation_messages.append(msg)
+                    
+                    # Check if this is a RespondToUser tool call (should be counted/displayed)
+                    is_respond_to_user = (
+                        message_type == "tool_call" and 
+                        msg.get("tool_calls") and 
+                        len(msg.get("tool_calls", [])) > 0 and
+                        msg["tool_calls"][0].get("name") == "RespondToUser"
+                    )
+                    
+                    # Filter out tool messages (except RespondToUser), status messages
+                    if message_type == "tool_call" and not is_respond_to_user:
+                        continue  # Skip non-RespondToUser tool calls
+                    if message_type == "tool_result" or message_type == "status":
+                        continue  # Skip tool results and status messages
+                    
+                    # Backward compatibility: filter legacy tool messages
+                    if not message_type and msg.get("role") == "tool":
+                        continue
+                    if not message_type and msg.get("content", "").startswith("responded: intent="):
+                        continue
+                    
+                    conversation_messages.append(msg)
 
                 # Get thread metadata
                 title = thread_data.get("title", "Untitled")
