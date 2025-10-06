@@ -433,9 +433,8 @@ export class ChatManager {
       `🔄 Displaying ${existingMessages.length} existing messages from history`
     );
     for (const msg of existingMessages) {
-      // Filter out status messages from history using metadata
-      const messageType = msg.metadata?.messageType;
-      if (msg.content && messageType !== 'status') {
+      // Messages are already filtered in service.ts, just display them
+      if (msg.content) {
         console.log(
           `🔄 Displaying history message: ${msg.role} - ${msg.content.substring(
             0,
@@ -447,13 +446,6 @@ export class ChatManager {
           msg.content,
           msg.timestamp,
           msg.metadata
-        );
-      } else {
-        console.log(
-          `🔄 Filtering out status message from history: ${msg.content.substring(
-            0,
-            50
-          )}...`
         );
       }
     }

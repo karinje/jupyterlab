@@ -293,10 +293,62 @@ export class ChatService implements IChatService {
 
         // Convert server messages to chat messages
         for (const msg of threadMessages) {
+          const messageType = msg.metadata?.messageType;
+          
+          // Check if this is a RespondToUser tool call (has tool_calls with RespondToUser)
+          const isRespondToUserCall = messageType === 'tool_call' && 
+            msg.tool_calls && 
+            msg.tool_calls.length > 0 && 
+            (msg.tool_calls[0].function?.name === 'RespondToUser' || msg.tool_calls[0].name === 'RespondToUser');
+          
+          // Filter out tool messages (but keep RespondToUser tool calls, skip their results)
+          if (messageType === 'tool_call' && !isRespondToUserCall) {
+            console.log(`🔄 Filtering out tool_call message from history`);
+            continue;
+          }
+          if (messageType === 'tool_result' || messageType === 'status') {
+            console.log(`🔄 Filtering out ${messageType} message from history`);
+            continue;
+          }
+          
+          // BACKWARD COMPATIBILITY: Filter old messages without metadata by content pattern
+          // Old tool results have content like "Code executed successfully..." or "responded: intent=..."
+          if (!messageType && msg.role === 'tool') {
+            console.log(`🔄 Filtering out legacy tool message (no metadata): ${msg.content?.substring(0, 50)}`);
+            continue;
+          }
+          if (!messageType && msg.content?.startsWith('responded: intent=')) {
+            console.log(`🔄 Filtering out legacy RespondToUser result: ${msg.content?.substring(0, 50)}`);
+            continue;
+          }
+          
+          // For RespondToUser tool calls, extract the message from tool_calls args
+          let displayContent = msg.content;
+          let displayRole = msg.role as 'user' | 'assistant';
+          
+          if (isRespondToUserCall) {
+            try {
+              const toolCall = msg.tool_calls[0];
+              // Handle both formats: {args: {...}} and {function: {arguments: "..."}}
+              let args;
+              if (toolCall.args) {
+                args = toolCall.args;  // Already parsed
+              } else if (toolCall.function?.arguments) {
+                const argsStr = toolCall.function.arguments;
+                args = typeof argsStr === 'string' ? JSON.parse(argsStr) : argsStr;
+              }
+              displayContent = args?.message || msg.content;
+              displayRole = 'assistant';  // RespondToUser always displays as assistant
+            } catch (e) {
+              console.error('Failed to parse RespondToUser args:', e);
+              displayContent = msg.content;
+            }
+          }
+          
           const chatMessage: IChatMessage = {
             id: UUID.uuid4(),
-            role: msg.role as 'user' | 'assistant',
-            content: msg.content,
+            role: displayRole,
+            content: displayContent,
             timestamp: new Date(msg.timestamp || Date.now()),
             metadata: { fromHistory: true }
           };
@@ -514,12 +566,70 @@ export class ChatService implements IChatService {
         metadata: { action: 'clear' }
       });
 
-      // Convert server messages to chat messages
+      // Convert server messages to chat messages (with filtering)
       for (const msg of selectedThread.messages || []) {
+        const messageType = msg.metadata?.messageType;
+        
+        console.log(`🔍 [switchThread] Processing message: role=${msg.role}, messageType=${messageType}, content=${msg.content?.substring(0, 50)}`);
+        
+        // Check if this is a RespondToUser tool call
+        const isRespondToUserCall = messageType === 'tool_call' && 
+          msg.tool_calls && 
+          msg.tool_calls.length > 0 && 
+          (msg.tool_calls[0].function?.name === 'RespondToUser' || msg.tool_calls[0].name === 'RespondToUser');
+        
+        console.log(`🔍 [switchThread] isRespondToUserCall=${isRespondToUserCall}, has tool_calls=${!!msg.tool_calls}`);
+        if (msg.tool_calls) {
+          console.log(`🔍 [switchThread] tool_calls structure:`, JSON.stringify(msg.tool_calls).substring(0, 200));
+        }
+        
+        // Filter out tool messages (but keep RespondToUser tool calls, skip their results)
+        if (messageType === 'tool_call' && !isRespondToUserCall) {
+          console.log(`🔄 [switchThread] Filtering out tool_call message`);
+          continue;
+        }
+        if (messageType === 'tool_result' || messageType === 'status') {
+          console.log(`🔄 [switchThread] Filtering out ${messageType} message`);
+          continue;
+        }
+        
+        // BACKWARD COMPATIBILITY: Filter old messages without metadata
+        if (!messageType && msg.role === 'tool') {
+          console.log(`🔄 [switchThread] Filtering out legacy tool message: ${msg.content?.substring(0, 50)}`);
+          continue;
+        }
+        if (!messageType && msg.content?.startsWith('responded: intent=')) {
+          console.log(`🔄 [switchThread] Filtering out legacy RespondToUser: ${msg.content?.substring(0, 50)}`);
+          continue;
+        }
+        
+        // For RespondToUser tool calls, extract the message from tool_calls args
+        let displayContent = msg.content;
+        let displayRole = msg.role as 'user' | 'assistant';
+        
+        if (isRespondToUserCall) {
+          try {
+            const toolCall = msg.tool_calls[0];
+            // Handle both formats: {args: {...}} and {function: {arguments: "..."}}
+            let args;
+            if (toolCall.args) {
+              args = toolCall.args;  // Already parsed
+            } else if (toolCall.function?.arguments) {
+              const argsStr = toolCall.function.arguments;
+              args = typeof argsStr === 'string' ? JSON.parse(argsStr) : argsStr;
+            }
+            displayContent = args?.message || msg.content;
+            displayRole = 'assistant';
+          } catch (e) {
+            console.error('Failed to parse RespondToUser args:', e);
+            displayContent = msg.content;
+          }
+        }
+        
         const chatMessage: IChatMessage = {
           id: UUID.uuid4(),
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
+          role: displayRole,
+          content: displayContent,
           timestamp: new Date(msg.timestamp || Date.now()),
           metadata: { fromHistory: true, threadId: threadId }
         };

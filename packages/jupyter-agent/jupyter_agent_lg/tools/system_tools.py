@@ -55,14 +55,21 @@ def create_system_tools(chat_handler) -> List[StructuredTool]:
         StructuredTool.from_function(
             func=respond_to_user,
             name="RespondToUser",
-            description="""Send a message to the user. Use for:
+            description="""MANDATORY: Send a message to the user. This is the ONLY way to communicate with the user.
+
+CRITICAL: You MUST use this tool for ANY response to the user. Never generate plain text responses - they will not reach the chat interface and the user will never see them.
+
+Use for:
 - Asking clarifying questions (intent="clarification")
-- Providing status updates (intent="status_update")
+- Providing status updates (intent="status_update") 
 - Completing tasks (intent="completion")
 - Explaining results or next steps
+- ANY communication intended for the user
 
 Always include a descriptive thread_title (3-8 words) summarizing the conversation topic.
-Examples: "Sales Data Analysis", "ML Model Training", "Database Query Help".""",
+Examples: "Sales Data Analysis", "ML Model Training", "Database Query Help".
+
+REMEMBER: Plain text responses are invisible to users - always use this tool!""",
             args_schema=RespondToUserArgs,
             coroutine=respond_to_user,
         ),

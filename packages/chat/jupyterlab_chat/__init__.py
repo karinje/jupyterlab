@@ -713,16 +713,7 @@ class ChatMessageHandler(APIHandler):
                                         ):
                                             notebook_path = sessions[0].get("path")
                     if notebook_path and message_text:
-                        # Save assistant message to YDoc metadata (atomic with title update)
-                        conv = ConversationManager(self.serverapp)
-                        await conv.save_conversation_message(
-                            notebook_path,
-                            {"role": "assistant", "content": message_text},
-                            thread_id,  # Pass thread_id to save to same thread as user message
-                            thread_title,  # Pass thread_title for atomic update
-                        )
-
-                        # Broadcast live assistant message
+                        # Broadcast live assistant message (persistence happens at END node)
                         try:
                             targets = []
                             key = notebook_path or "*"
@@ -1104,27 +1095,7 @@ class ChatPlanCardsHandler(APIHandler):
                 f"📋 Received plan with {len(plan_steps)} steps for notebook {notebook_path}"
             )
 
-            # Store plan as user message in conversation history so LLM treats it as direct instructions
-            plan_content = "Final plan that needs to be implemented:\n\n"
-            for i, step in enumerate(plan_steps, 1):
-                title = step.get("title", f"Step {i}")
-                description = step.get("description", "")
-                plan_content += f"[CARD:{title}|{description}]\n"
-
-            plan_message = {
-                "role": "user",  # Changed from "assistant" to "user" so LLM pays attention
-                "content": plan_content.strip(),
-                "metadata": {"messageType": "plan"},
-            }
-
-            # Save plan message to conversation history
-            conversation_manager = ConversationManager(self.serverapp)
-            saved_thread_id = await conversation_manager.save_conversation_message(
-                notebook_path, plan_message, thread_id
-            )
-            logger.info(f"💾 Saved plan as user message in thread {saved_thread_id}")
-
-            # Broadcast plan cards to frontend via existing chat_broadcaster
+            # Broadcast plan cards to frontend (persistence happens at END node)
             chat_broadcaster.broadcast(
                 {
                     "type": "plan_cards",
@@ -1146,6 +1117,50 @@ class ChatPlanCardsHandler(APIHandler):
 
         except Exception as e:
             logger.error(f"Error in plan cards handler: {e}")
+            self.set_status(500)
+            self.finish({"error": str(e)})
+
+
+class ChatSaveToolMessagesHandler(APIHandler):
+    """Handler for saving tool interaction messages to conversation thread"""
+
+    def check_xsrf_cookie(self):
+        """Disable XSRF check for this endpoint"""
+        pass
+
+    @tornado.web.authenticated
+    async def post(self):
+        """Save tool call and result messages from agent workflow"""
+        try:
+            data = self.get_json_body()
+            notebook_path = data.get("notebook_path")
+            messages = data.get("messages", [])
+            thread_id = data.get("thread_id")
+
+            if not notebook_path or not messages:
+                self.set_status(400)
+                self.finish({"error": "notebook_path and messages are required"})
+                return
+
+            logger.info(
+                f"💾 [save_tool_messages] Saving {len(messages)} tool interaction messages to thread {thread_id}"
+            )
+
+            # Save each message to conversation thread
+            conversation_manager = ConversationManager(self.serverapp)
+            for msg in messages:
+                await conversation_manager.save_conversation_message(
+                    notebook_path, msg, thread_id
+                )
+                content_preview = msg.get("content", "")[:80]
+                logger.info(f"  ✅ Saved: {content_preview}...")
+
+            self.finish({"status": "ok", "saved_count": len(messages)})
+
+        except Exception as e:
+            logger.error(f"❌ Error saving tool messages: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             self.set_status(500)
             self.finish({"error": str(e)})
 
@@ -2156,6 +2171,8 @@ def _load_jupyter_server_extension(server_app):
         (r"/api/chat/conversations", ChatConversationsHandler),
         # Plan cards from CreatePlan tool - broadcasts plan steps to frontend
         (r"/api/chat/plan_cards", ChatPlanCardsHandler),
+        # Save tool interaction messages to conversation thread (for LLM context persistence)
+        (r"/api/chat/save_tool_messages", ChatSaveToolMessagesHandler),
         # Update plan message in conversation history when user edits cards
         (r"/api/chat/update_plan_message", ChatUpdatePlanMessageHandler),
     ]

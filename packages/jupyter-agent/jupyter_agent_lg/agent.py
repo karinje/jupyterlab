@@ -145,6 +145,35 @@ class ChatHandler:
         except Exception as e:
             logger.warning(f"Failed to display plan cards: {e}")
 
+    async def save_tool_interactions(
+        self,
+        messages: List[Dict[str, Any]],
+        notebook_path: Optional[str] = None,
+        thread_id: Optional[str] = None,
+    ):
+        """Save tool call and result messages to conversation thread for persistence"""
+        try:
+            import aiohttp
+
+            headers = {}
+            if self.token:
+                headers["Authorization"] = f"token {self.token}"
+
+            async with aiohttp.ClientSession() as session:
+                await session.post(
+                    f"{self.server_url}/api/chat/save_tool_messages",
+                    json={
+                        "messages": messages,
+                        "notebook_path": notebook_path or self.default_notebook_path,
+                        "thread_id": thread_id or self.current_thread_id,
+                    },
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                )
+                logger.info(f"💾 Saved {len(messages)} tool interaction messages to thread")
+        except Exception as e:
+            logger.warning(f"Failed to save tool interactions: {e}")
+
     async def save_thread_title(
         self,
         title: str,
@@ -645,6 +674,121 @@ class JupyterAgent:
             return True
         return False
 
+    async def _persist_tool_messages(
+        self, final_state: Dict[str, Any], notebook_path: str, thread_id: str
+    ):
+        """Extract and save tool interaction messages to conversation thread.
+        
+        Converts LangChain message objects to OpenAI-compatible dict format and saves them.
+        These messages are filtered from UI display but included in LLM context.
+        """
+        try:
+            from langchain_core.messages import AIMessage, ToolMessage
+
+            messages = final_state.get("messages", [])
+            if not messages:
+                logger.info("💾 No state messages to persist - state['messages'] is empty")
+                return
+
+            # Get initial conversation length to determine which messages are NEW
+            initial_conv_history = final_state.get("conversation_history", [])
+            logger.info(
+                f"💾 state['messages'] has {len(messages)} total messages"
+            )
+            logger.info(
+                f"💾 conversation_history had {len(initial_conv_history)} messages at start"
+            )
+            
+            # Log EXACT content of state["messages"] for debugging
+            import json
+            for i, msg in enumerate(messages):
+                msg_type = type(msg).__name__
+                tool_calls = getattr(msg, "tool_calls", [])
+                tool_call_id = getattr(msg, "tool_call_id", None)
+                name = getattr(msg, "name", None)
+                content_preview = str(getattr(msg, "content", ""))[:80]
+                logger.info(
+                    f"💾   state['messages'][{i}]: type={msg_type}, "
+                    f"tool_calls={len(tool_calls) if tool_calls else 0}, "
+                    f"tool_call_id={tool_call_id}, name={name}, content={content_preview}"
+                )
+
+            # Convert LangChain messages to OpenAI-compatible format
+            messages_to_save = []
+
+            # Save ALL messages from state["messages"] - they're all from THIS workflow run
+            for msg in messages:
+                # AIMessage with tool_calls - save all tools uniformly
+                if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", []):
+                    tool_calls = msg.tool_calls
+                    if tool_calls:
+                        tool_name = tool_calls[0].get("name")
+                        
+                        # Save all tool calls uniformly (except CreatePlan which is handled in ToolMessage)
+                        if tool_name != "CreatePlan":
+                            messages_to_save.append({
+                                "role": "assistant",
+                                "content": "",  # Empty per OpenAI convention for tool calls
+                                "tool_calls": tool_calls,  # Full tool call structure
+                                "metadata": {"messageType": "tool_call"}
+                            })
+                        # CreatePlan is handled in ToolMessage section below
+
+                # ToolMessage (result from tool execution)
+                elif isinstance(msg, ToolMessage):
+                    tool_name = getattr(msg, "name", "unknown")
+                    
+                    # Special handling for CreatePlan - save as user message with plan format
+                    if tool_name == "CreatePlan":
+                        # Extract plan steps from the AIMessage that called CreatePlan
+                        # Find the corresponding AIMessage with CreatePlan tool_call
+                        for prev_msg in messages:
+                            if isinstance(prev_msg, AIMessage) and getattr(prev_msg, "tool_calls", []):
+                                prev_tool_calls = prev_msg.tool_calls
+                                if prev_tool_calls and prev_tool_calls[0].get("name") == "CreatePlan":
+                                    # Extract plan_steps from the tool call arguments
+                                    plan_steps = prev_tool_calls[0].get("args", {}).get("plan_steps", [])
+                                    
+                                    # Convert to [CARD:title|description] format
+                                    plan_content = "Final plan that needs to be implemented:\n\n"
+                                    for step in plan_steps:
+                                        title = step.get("title", "")
+                                        description = step.get("description", "")
+                                        plan_content += f"[CARD:{title}|{description}]\n"
+                                    
+                                    # Save as user message (so LLM treats it as instructions)
+                                    messages_to_save.append({
+                                        "role": "user",
+                                        "content": plan_content.strip(),
+                                        "metadata": {"messageType": "plan"}
+                                    })
+                                    break
+                    else:
+                        # Regular tool message - save as tool result
+                        messages_to_save.append({
+                            "role": "tool",
+                            "content": str(msg.content),
+                            "tool_call_id": getattr(msg, "tool_call_id", None),
+                            "name": tool_name,
+                            "metadata": {"messageType": "tool_result"}
+                        })
+
+            # Save to conversation thread if we have messages
+            if messages_to_save:
+                logger.info(
+                    f"💾 Persisting {len(messages_to_save)} tool interaction messages"
+                )
+                await self.chat_handler.save_tool_interactions(
+                    messages_to_save, notebook_path, thread_id
+                )
+            else:
+                logger.info("💾 No tool interaction messages to persist (only RespondToUser/CreatePlan)")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to persist tool messages: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+
     async def process_request(
         self,
         request: str,
@@ -720,6 +864,10 @@ class JupyterAgent:
             logger.info(
                 f"🏁 Workflow completed with final state keys: {list(final_state.keys())}"
             )
+
+            # CRITICAL: Persist tool interaction messages to conversation thread
+            # This ensures tool calls/results survive across agent invocations
+            await self._persist_tool_messages(final_state, notebook_path, thread_id)
 
             # Extract result to return
             result = final_state.get("final_result", "Analysis completed")
@@ -928,22 +1076,19 @@ Current Iteration: {state.get("current_iteration", 0)}"""
                 f"🧠 [analyze_and_decide] Final message count: {len(messages)} (system=1, conversation={len(conversation_history)}, state={len(state['messages'])})"
             )
 
-            # Log message structure for debugging
+            # Log EXACT message structure as it will be sent to LLM (no formatting/truncation)
+            import json
             for i, msg in enumerate(messages):
-                # Handle both dict messages and LangChain message objects
-                if hasattr(msg, "type"):  # LangChain message object
-                    role = msg.type if hasattr(msg, "type") else "unknown"
-                    content_preview = (
-                        str(msg.content)[:100] + "..."
-                        if len(str(msg.content)) > 100
-                        else str(msg.content)
-                    )
-                else:  # Dictionary message
-                    role = msg.get("role", "unknown")
-                    content_preview = msg.get(
-                        "content", ""
-                    )  # REMOVE TRUNCATION TO SEE FULL PLAN
-                logger.debug(f"  Message {i}: {role} - {content_preview}")
+                # Convert to dict for logging (handles both LangChain objects and dicts)
+                if hasattr(msg, "dict"):  # LangChain message object
+                    msg_dict = msg.dict()
+                elif hasattr(msg, "model_dump"):  # Pydantic v2
+                    msg_dict = msg.model_dump()
+                else:  # Already a dict
+                    msg_dict = msg
+                
+                # Log the EXACT structure that LLM sees
+                logger.debug(f"  Message {i}: {json.dumps(msg_dict, indent=2)}")
 
             # Introspect the bound runnable to fetch the raw OpenAI tools payload, if available
             try:
@@ -1012,16 +1157,30 @@ Current Iteration: {state.get("current_iteration", 0)}"""
                 cpreview = tool_response.content[:200].replace("\n", " ")
                 logger.warning(f"🧠 [analyze_and_decide] content preview='{cpreview}'")
 
-            # Always append the AI tool message; execution/validation will enforce the contrac
+            # Always append the AI tool message; execution/validation will enforce the contract
+            # If this is a tool call, create a more informative message for LLM context
+            if getattr(tool_response, "tool_calls", []):
+                # Extract status_message from first tool call for better context
+                first_tool_call = tool_response.tool_calls[0]
+                tool_name = first_tool_call.get("name", "unknown_tool")
+                tool_args = first_tool_call.get("args", {})
+                status_msg = tool_args.get("status_message", "")
+                
+                # Create informative content instead of empty string
+                if status_msg:
+                    tool_response.content = f"[{tool_name}] {status_msg}"
+                else:
+                    tool_response.content = f"[{tool_name}] Executing tool..."
+                    
             state["messages"].append(tool_response)
-            # If no tool_calls, inject a short nudge for the self-loop path (retry cap handled by routing)
+            # If no tool_calls, inject a user-style correction nudge (retry cap handled by routing)
             if not getattr(tool_response, "tool_calls", []):
                 attempts = state.get("correction_attempts", 0) + 1
                 state["correction_attempts"] = attempts
                 if attempts <= 3:
                     nudge = {
-                        "role": "system",
-                        "content": "Call exactly one tool now. Include a short status_message describing the step.",
+                        "role": "user",
+                        "content": "You just provided a text response, but I can't see it in the chat. According to the system instructions, you were supposed to call a tool (like RespondToUser if the task is complete, or another action tool if you need to continue). What did you mean to do?",
                     }
                     state["messages"].append(nudge)
             logger.info(

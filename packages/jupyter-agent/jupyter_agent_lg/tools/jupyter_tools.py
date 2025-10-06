@@ -29,6 +29,8 @@ except ImportError:
 from ..schemas import (
     InsertCellArgs,
     DeleteCellArgs,
+    UpdateCellArgs,
+    InsertMarkdownArgs,
     # GetNotebookCellsArgs - removed, tool disabled
     # ExecuteCodeArgs - removed, tool no longer exists
 )
@@ -86,9 +88,13 @@ def create_jupyter_tools(
             tool_logger.error(f"Error inserting/executing cell: {e}")
             return f"Error: {str(e)}"
 
-    async def delete_cell(cell_index: int) -> str:
+    async def delete_cell(cell_index: int, status_message: str = None) -> str:
         """Delete a cell from the notebook"""
         try:
+            # Send status update if provided
+            if status_message:
+                await send_status(status_message)
+            
             result = await jupyter_tools_client.delete_cell(
                 notebook_path=notebook_path, index=cell_index
             )
@@ -99,6 +105,56 @@ def create_jupyter_tools(
             return f"Failed to delete cell {deleted_index}: {result}"
         except Exception as e:
             tool_logger.error(f"Error deleting cell: {e}")
+            return f"Error: {str(e)}"
+
+    async def update_cell(cell_index: int, source: str = None, metadata: dict = None, status_message: str = None) -> str:
+        """Update a cell's content or metadata"""
+        try:
+            # Send status update if provided
+            if status_message:
+                await send_status(status_message)
+            
+            tool_logger.info(f"🔧 TOOL CALLED: update_cell for cell {cell_index}")
+            result = await jupyter_tools_client.update_cell(
+                notebook_path=notebook_path, 
+                index=cell_index, 
+                source=source, 
+                metadata=metadata
+            )
+            status = result.get("status", "unknown")
+            updated_index = result.get("updated_index", cell_index)
+            if status == "ok" or status == "success":
+                changes = []
+                if source is not None:
+                    changes.append("source")
+                if metadata is not None:
+                    changes.append("metadata")
+                change_desc = " and ".join(changes) if changes else "content"
+                return f"Cell {updated_index} {change_desc} updated successfully"
+            return f"Failed to update cell {updated_index}: {result}"
+        except Exception as e:
+            tool_logger.error(f"Error updating cell: {e}")
+            return f"Error: {str(e)}"
+
+    async def insert_markdown(markdown: str, position: str = "end", status_message: str = None) -> str:
+        """Insert a markdown cell into the notebook"""
+        try:
+            # Send status update if provided
+            if status_message:
+                await send_status(status_message)
+            
+            tool_logger.info(f"🔧 TOOL CALLED: insert_markdown at position {position}")
+            cell_index = "append" if position == "end" else 0
+            result = await jupyter_tools_client.insert_markdown(
+                notebook_path=notebook_path,
+                markdown=markdown,
+                cell_index=cell_index,
+            )
+            cell_id = result.get("cell_id")
+            actual_index = result.get("index")
+            return f"Markdown cell inserted successfully at position {actual_index} (cell_id: {cell_id})"
+        except Exception as e:
+            tool_logger.error(f"Error inserting markdown cell: {e}")
             return f"Error: {str(e)}"
 
     # Create the tools with category metadata
@@ -129,6 +185,34 @@ Use sparingly - prefer creating new cells over deleting.
 Verify cell index carefully to avoid deleting wrong content.""",
             args_schema=DeleteCellArgs,
             coroutine=delete_cell,
+        ),
+        StructuredTool.from_function(
+            func=update_cell,
+            name="update_cell",
+            description="""Update existing cell content or metadata. Use for:
+- Modifying code in existing cells
+- Fixing errors in previously written code
+- Updating cell metadata or properties
+- Replacing cell content without changing execution order
+
+Specify either source (for content) or metadata (for cell properties).
+Use cell index to target the specific cell to update.""",
+            args_schema=UpdateCellArgs,
+            coroutine=update_cell,
+        ),
+        StructuredTool.from_function(
+            func=insert_markdown,
+            name="insert_markdown",
+            description="""Insert markdown documentation into notebook. Use for:
+- Adding explanatory text and documentation
+- Creating section headers and organizing content
+- Documenting analysis steps and methodology
+- Adding formatted text, equations, or descriptions
+
+Markdown supports headers (#), lists, code blocks, math equations, and formatting.
+Use to make notebooks more readable and well-documented.""",
+            args_schema=InsertMarkdownArgs,
+            coroutine=insert_markdown,
         ),
     ]
 

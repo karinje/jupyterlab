@@ -60,6 +60,36 @@ class DeleteCellArgs(BaseModel):
     """Arguments for delete_cell tool"""
 
     cell_index: int = Field(description="Index of the cell to delete (0-based)")
+    status_message: Optional[str] = Field(
+        default=None,
+        description="Brief status message describing what you're deleting (e.g., 'Removing failed analysis cell')"
+    )
+
+
+class UpdateCellArgs(BaseModel):
+    """Arguments for update_cell tool"""
+
+    cell_index: int = Field(description="Index of the cell to update (0-based)")
+    source: Optional[str] = Field(default=None, description="New source content for the cell")
+    metadata: Optional[dict] = Field(default=None, description="New metadata for the cell")
+    status_message: Optional[str] = Field(
+        default=None,
+        description="Brief status message describing what you're updating (e.g., 'Fixing code error in analysis')"
+    )
+
+
+class InsertMarkdownArgs(BaseModel):
+    """Arguments for insert_markdown tool"""
+
+    markdown: str = Field(description="Markdown content to insert")
+    position: Literal["start", "end"] = Field(
+        default="end",
+        description="Where to insert the cell: 'start' for beginning, 'end' for bottom",
+    )
+    status_message: Optional[str] = Field(
+        default=None,
+        description="Brief status message describing what documentation you're adding (e.g., 'Adding analysis explanation')"
+    )
 
 
 # DISABLED: GetNotebookCellsArgs - tool removed as redundant
