@@ -886,7 +886,21 @@ class JupyterAgent:
 
     def _create_system_instructions(self) -> str:
         """Create system instructions without conversation history"""
-        return """You are a data analysis agent working in JupyterLab. Decide what to do next and EXPRESS your decision via TOOL CALLS ONLY.
+        return """You are a data analysis agent working in JupyterLab. You have access to a live Jupyter notebook and can execute code, create visualizations, and manipulate cells in real-time.
+
+CONTEXT YOU RECEIVE:
+1. **Conversation History**: All previous user messages and your responses in this thread
+2. **Current Notebook State**: Complete contents of the active notebook including:
+   - ALL cells (code, markdown, empty) with their actual 0-based indices
+   - Execution status for each code cell (executed with count, or not executed)
+   - Full source code for every cell (not truncated)
+   - Output indicators (plots, data, text)
+
+HOW TO RESPOND:
+- Read the conversation history to understand what the user wants
+- Check the notebook state to see what's already been done
+- Use Jupyter tools to modify the notebook (insert code, delete cells, etc.)
+- The notebook you see IS the notebook the user is working in - your actions affect it directly
 
 TOOL-CALLING CONTRACT (STRICT):
 - Produce exactly ONE tool call per turn
@@ -983,16 +997,22 @@ The conversation history shows you everything - read it naturally and respond ap
 --------
 Notebook Context Guide:
 
-Cell Status:
-- ✅ Executed (#N) = Cell was run successfully (execution count N indicates order)
-- ✅ Executed (#N) with outputs = Cell produced results/plots/data
-- ⏸️ Not executed = Cell exists but hasn't been run yet
+The notebook state below shows ALL cells with their ACTUAL indices (0-based). This includes:
+- Code cells (executed and not executed)
+- Markdown cells
+- Empty cells
 
-Output Types:
-- "matplotlib_plot" = Chart/graph created
-- "svg_plot" = SVG graphics
-- "dataframe_table" = Data table
-- "text" = Text output (may be truncated at 1000 chars)
+CRITICAL INDEX USAGE:
+- When using delete_cell(cell_index), use the EXACT "Index N" shown below
+- Index numbers match the actual notebook cell positions
+- Do NOT skip or renumber - use the index exactly as shown
+
+Cell Status Indicators:
+- ✅ Code cell (executed #N) = Cell was run successfully (execution count N)
+- ✅ Code cell (executed #N) with outputs = Cell produced results/plots/data
+- ⏸️ Code cell (not executed) = Code cell exists but hasn't been run yet
+- 📝 Markdown cell = Documentation/text cell
+- Empty cells are shown with no content after the index line
 
 Current Notebook State:
 {notebook_summary}
@@ -1265,34 +1285,39 @@ Current Iteration: {state.get("current_iteration", 0)}"""
             return state
 
     def _summarize_notebook(self, notebook_cells: List[Dict]) -> str:
-        """Create complete summary of all code cells with execution status"""
+        """Create complete summary of ALL cells with ACTUAL indices (no filtering)"""
         if not notebook_cells:
             return "Empty notebook"
 
-        code_cells = [c for c in notebook_cells if c.get("type") == "code"]
+        summary = "All Notebook Cells (with actual indices):\n"
 
-        if not code_cells:
-            return "No code cells in notebook"
-
-        summary = "All Code Cells:\n"
-
-        for i, cell in enumerate(code_cells):
+        for i, cell in enumerate(notebook_cells):
+            cell_type = cell.get("type", "unknown")
             source = cell.get("source", "").strip()
-            if not source:
-                continue
 
-            # Check if cell was executed (has execution_count)
-            execution_count = cell.get("execution_count")
-            has_outputs = bool(cell.get("outputs"))
+            # Include ALL cells with their actual index - FULL CONTENT, NO TRUNCATION
+            if cell_type == "code":
+                # Check if cell was executed (has execution_count)
+                execution_count = cell.get("execution_count")
+                has_outputs = bool(cell.get("outputs"))
 
-            if execution_count is not None:
-                status = f"✅ Executed (#{execution_count})"
-                if has_outputs:
-                    status += " with outputs"
+                if execution_count is not None:
+                    status = f"✅ Code cell (executed #{execution_count})"
+                    if has_outputs:
+                        status += " with outputs"
+                else:
+                    status = "⏸️ Code cell (not executed)"
+
+                # Show FULL source as-is (empty if empty)
+                summary += f"Index {i}: {status}\n{source}\n\n"
+            
+            elif cell_type == "markdown":
+                # Include markdown cells with FULL content
+                summary += f"Index {i}: 📝 Markdown cell\n{source}\n\n"
+            
             else:
-                status = "⏸️ Not executed"
-
-            summary += f"Cell {i + 1}: {status}\n{source}\n\n"
+                # Include any other cell types with FULL content
+                summary += f"Index {i}: {cell_type} cell\n{source}\n\n"
 
         # Debug: Log the actual notebook summary being sent to LLM
         logger.info(f"📋 [_summarize_notebook] Summary for LLM: {summary[:500]}...")
