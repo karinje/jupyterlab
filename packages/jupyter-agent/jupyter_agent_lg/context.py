@@ -33,11 +33,15 @@ class NotebookStateManager:
         self.headers = {"Authorization": f"token {token}"}
         # Truncation settings (defaults): no truncation for source; conservative for outputs
         self.max_source_chars: Optional[int] = None  # None => do not truncate code/markdown
-        self.max_text_plain_chars: int = 1000  # execute_result/display_data text/plain
-        self.max_stream_chars: int = 500  # stream text
+        self.max_text_plain_chars: int = 10000  # execute_result/display_data text/plain
+        self.max_stream_chars: int = 5000  # stream text
 
     async def get_complete_notebook_state(self, notebook_path: str) -> List[Dict]:
-        """Get all cells with intelligently summarized outputs"""
+        """Get all cells ready for LLM context - ONE PASS, NO REDUNDANCY
+        
+        Returns:
+            List[Dict]: cells with everything needed for multimodal LLM
+        """
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
@@ -45,180 +49,173 @@ class NotebookStateManager:
                     headers=self.headers,
                 ) as resp:
                     if resp.status != 200:
-                        logger.error(
-                            f"Failed to load notebook {notebook_path}: {resp.status}"
-                        )
+                        logger.error(f"Failed to load notebook {notebook_path}: {resp.status}")
                         return []
 
                     notebook_data = await resp.json()
                     notebook_content = notebook_data.get("content", {})
-                    cells = notebook_content.get("cells", [])
+                    raw_cells = notebook_content.get("cells", [])
 
-                    # Summarize cells for LLM context
-                    summarized_cells = []
-                    for i, cell in enumerate(cells):
-                        cell_summary = self._summarize_cell(cell, i)
-                        summarized_cells.append(cell_summary)
+                    # SINGLE PASS: Process all cells and create complete multimodal content
+                    complete_multimodal_content = self._create_complete_multimodal_content(raw_cells)
 
-                    logger.info(
-                        f"📊 Retrieved {len(summarized_cells)} cells from {notebook_path}"
-                    )
-                    return summarized_cells
+                    logger.info(f"📊 Processed {len(raw_cells)} cells into complete multimodal content from {notebook_path}")
+                    return complete_multimodal_content
 
         except Exception as e:
             logger.error(f"Error loading notebook state: {e}")
             return []
 
-    def _summarize_cell(self, cell: Dict[str, Any], index: int) -> Dict[str, Any]:
-        """Smart cell summarization to avoid token explosion"""
-        cell_summary = {
-            "index": index,
-            "type": cell.get("cell_type", "unknown"),
-            "id": cell.get("id", f"cell-{index}"),
-            "execution_count": cell.get("execution_count"),
-            "source": self._summarize_source(cell.get("source", []), self.max_source_chars),
-            "outputs": self._summarize_outputs(
-                cell.get("outputs", []),
-                max_text_plain_chars=self.max_text_plain_chars,
-                max_stream_chars=self.max_stream_chars,
-            ),
-            "metadata": cell.get("metadata", {}),
-        }
+    def _create_complete_multimodal_content(self, raw_cells: List[Dict]) -> List[Dict]:
+        """SINGLE PASS: Create complete multimodal content ready for LLM system message"""
+        
+        # Start with context header
+        complete_content = [{
+            "type": "text", 
+            "text": """Current Context:
+--------
+Notebook Context Guide:
 
-        return cell_summary
+The notebook state below shows ALL cells with their ACTUAL indices (0-based). This includes:
+- Code cells (executed and not executed)
+- Markdown cells
+- Empty cells
+- Images from plots/charts (you can see these images directly)
 
-    def _summarize_source(self, source: List[str] | str, max_chars: Optional[int] = None) -> str:
-        """Summarize cell source code/markdown; None => no truncation"""
-        if isinstance(source, list):
-            source_text = "".join(source)
-        else:
-            source_text = source
+CRITICAL INDEX USAGE:
+- When using delete_cell(cell_index), use the EXACT "Index N" shown below
+- Index numbers match the actual notebook cell positions
+- Do NOT skip or renumber - use the index exactly as shown
 
-        if max_chars is not None and len(source_text) > max_chars:
-            return source_text[:max_chars] + "\n... [truncated]"
+Cell Status Indicators:
+- ✅ Code cell (executed #N) = Cell was run successfully (execution count N)
+- ✅ Code cell (executed #N) with outputs = Cell produced results/plots/data
+- ⏸️ Code cell (not executed) = Code cell exists but hasn't been run yet
+- 📝 Markdown cell = Documentation/text cell
+- Empty cells are shown with no content after the index line
 
-        return source_text
-
-    def _summarize_outputs(
-        self,
-        outputs: List[Dict],
-        *,
-        max_text_plain_chars: int = 1000,
-        max_stream_chars: int = 500,
-    ) -> List[Dict]:
-        """Smart output summarization to avoid token explosion"""
-        summarized = []
-
-        for output in outputs:
-            output_type = output.get("output_type", "unknown")
-
-            if output_type == "execute_result" or output_type == "display_data":
-                summary = self._summarize_data_output(
-                    output, max_text_plain_chars=max_text_plain_chars
-                )
-            elif output_type == "stream":
-                summary = self._summarize_stream_output(
-                    output, max_stream_chars=max_stream_chars
-                )
-            elif output_type == "error":
-                summary = self._summarize_error_output(output)
+Current Notebook State:
+All Notebook Cells (with actual indices):
+"""
+        }]
+        
+        # Process each cell in sequence
+        for i, raw_cell in enumerate(raw_cells):
+            cell_type = raw_cell.get("cell_type", "unknown")
+            execution_count = raw_cell.get("execution_count")
+            raw_source = raw_cell.get("source", [])
+            raw_outputs = raw_cell.get("outputs", [])
+            
+            # Truncate source if needed
+            if isinstance(raw_source, list):
+                source_text = "".join(raw_source)
             else:
-                summary = {"type": output_type, "content": "unknown output type"}
+                source_text = raw_source
+                
+            if self.max_source_chars and len(source_text) > self.max_source_chars:
+                source_text = source_text[:self.max_source_chars] + "\n... [truncated]"
 
-            summarized.append(summary)
-
-        return summarized
-
-    def _summarize_data_output(self, output: Dict, *, max_text_plain_chars: int) -> Dict:
-        """Summarize data outputs (plots, tables, etc.)"""
-        data = output.get("data", {})
-        summary = {
-            "type": output.get("output_type"),
-            "execution_count": output.get("execution_count"),
-        }
-
-        # Text output
-        if "text/plain" in data:
-            text = data["text/plain"]
-            if isinstance(text, list):
-                text = "".join(text)
-
-            # Truncate long text output
-            if len(text) > max_text_plain_chars:
-                summary["text"] = text[:max_text_plain_chars] + "\n... [truncated]"
-            else:
-                summary["text"] = text
-
-        # HTML output (DataFrames, etc.)
-        if "text/html" in data:
-            summary["has_html"] = True
-            # Try to extract table info for DataFrames
-            html_content = data["text/html"]
-            if isinstance(html_content, list):
-                html_content = "".join(html_content)
-
-            if "<table" in html_content.lower():
-                summary["content_type"] = "dataframe_table"
-                # Extract basic table info
-                if "shape:" in html_content:
-                    import re
-
-                    shape_match = re.search(r"(\d+) rows × (\d+) columns", html_content)
-                    if shape_match:
-                        summary["table_shape"] = (
-                            f"{shape_match.group(1)} rows × {shape_match.group(2)} columns"
-                        )
-
-        # Image output (plots)
-        if "image/png" in data:
-            summary["has_plot"] = True
-            summary["content_type"] = "matplotlib_plot"
-
-        if "image/svg+xml" in data:
-            summary["has_svg"] = True
-            summary["content_type"] = "svg_plot"
-
-        # JSON output
-        if "application/json" in data:
-            summary["has_json"] = True
-            try:
-                json_data = data["application/json"]
-                if isinstance(json_data, dict) and len(json_data) < 10:
-                    summary["json_preview"] = json_data
+            # Build cell text and extract images in ONE PASS
+            if cell_type == "code":
+                if execution_count is not None:
+                    status = f"✅ Code cell (executed #{execution_count})"
+                    if raw_outputs:
+                        status += " with outputs"
                 else:
-                    summary["json_size"] = len(str(json_data))
-            except:
-                summary["json_preview"] = "complex json data"
+                    status = "⏸️ Code cell (not executed)"
+                
+                cell_text = f"Index {i}: {status}\n{source_text}\n"
+                
+                # Process outputs and extract images
+                if raw_outputs:
+                    cell_text += "  Outputs:\n"
+                    for output in raw_outputs:
+                        output_type = output.get("output_type", "unknown")
+                        
+                        if output_type == "error":
+                            ename = output.get("ename", "Unknown")
+                            evalue = output.get("evalue", "")
+                            cell_text += f"    ❌ ERROR: {ename}: {evalue}\n"
+                            
+                        elif output_type == "stream":
+                            text = output.get("text", "")
+                            if isinstance(text, list):
+                                text = "".join(text)
+                            if len(text) > self.max_stream_chars:
+                                text = text[:self.max_stream_chars] + "\n... [truncated]"
+                            cell_text += f"    📝 {output.get('name', 'stdout')}: {text}\n"
+                            
+                        elif output_type in ["execute_result", "display_data"]:
+                            data = output.get("data", {})
+                            
+                            # Text output
+                            if "text/plain" in data:
+                                text = data["text/plain"]
+                                if isinstance(text, list):
+                                    text = "".join(text)
+                                if len(text) > self.max_text_plain_chars:
+                                    text = text[:self.max_text_plain_chars] + "\n... [truncated]"
+                                cell_text += f"    📊 Result: {text}\n"
+                            
+                            # DataFrame detection
+                            if "text/html" in data:
+                                html_content = data["text/html"]
+                                if isinstance(html_content, list):
+                                    html_content = "".join(html_content)
+                                if "<table" in html_content.lower():
+                                    import re
+                                    shape_match = re.search(r"(\d+) rows × (\d+) columns", html_content)
+                                    if shape_match:
+                                        cell_text += f"    📊 DataFrame: {shape_match.group(1)} rows × {shape_match.group(2)} columns\n"
+                            
+                            # Images - add to content AND extract for multimodal
+                            has_image = False
+                            if "image/png" in data:
+                                png_data = data["image/png"]
+                                if isinstance(png_data, str) and png_data:
+                                    complete_content.append({"type": "text", "text": cell_text})
+                                    complete_content.append({
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:image/png;base64,{png_data}"}
+                                    })
+                                    has_image = True
+                                    
+                            if "image/jpeg" in data:
+                                jpeg_data = data["image/jpeg"]
+                                if isinstance(jpeg_data, str) and jpeg_data:
+                                    if not has_image:  # Don't add text twice
+                                        complete_content.append({"type": "text", "text": cell_text})
+                                    complete_content.append({
+                                        "type": "image_url", 
+                                        "image_url": {"url": f"data:image/jpeg;base64,{jpeg_data}"}
+                                    })
+                                    has_image = True
+                            
+                            if has_image:
+                                cell_text += f"    📊 [IMAGE] Chart/Plot - You can see this image\n"
+                            
+                            # JSON data
+                            if "application/json" in data:
+                                json_data = data["application/json"]
+                                if isinstance(json_data, dict) and len(json_data) < 10:
+                                    cell_text += f"    📋 JSON: {json_data}\n"
+                                else:
+                                    cell_text += f"    📋 JSON data (size: {len(str(json_data))})\n"
+                
+                # Add cell text if no images were found
+                if not any("image/" in output.get("data", {}) for output in raw_outputs if output.get("data")):
+                    complete_content.append({"type": "text", "text": cell_text + "\n"})
+            
+            elif cell_type == "markdown":
+                cell_text = f"Index {i}: 📝 Markdown cell\n{source_text}\n\n"
+                complete_content.append({"type": "text", "text": cell_text})
+            
+            else:
+                cell_text = f"Index {i}: {cell_type} cell\n{source_text}\n\n"
+                complete_content.append({"type": "text", "text": cell_text})
 
-        return summary
+        return complete_content
 
-    def _summarize_stream_output(self, output: Dict, *, max_stream_chars: int) -> Dict:
-        """Summarize stream outputs (stdout/stderr)"""
-        text = output.get("text", "")
-        if isinstance(text, list):
-            text = "".join(text)
-
-        summary = {
-            "type": "stream",
-            "name": output.get("name", "stdout"),
-        }
-
-        # Truncate long stream output
-        if len(text) > max_stream_chars:
-            summary["text"] = text[:max_stream_chars] + "\n... [truncated]"
-        else:
-            summary["text"] = text
-
-        return summary
-
-    def _summarize_error_output(self, output: Dict) -> Dict:
-        """Summarize error outputs"""
-        return {
-            "type": "error",
-            "ename": output.get("ename", "Unknown"),
-            "evalue": output.get("evalue", ""),
-            "traceback_lines": len(output.get("traceback", [])),
-        }
 
     async def get_execution_history(
         self, notebook_path: str, limit: int = 10

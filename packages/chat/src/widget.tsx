@@ -136,7 +136,8 @@ export class ChatManager {
             <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
             <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
             <option value="claude-3-opus-20240229">Claude 3 Opus</option>
-            <option value="gemini-pro" disabled>Gemini Pro (Soon)</option>
+            <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash</option>
+            <option value="gemini-pro">Gemini Pro</option>
           </select>
 
           <!-- Thread Management Buttons -->

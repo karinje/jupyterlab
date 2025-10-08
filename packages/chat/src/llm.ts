@@ -156,7 +156,7 @@ export class ClaudeProvider extends BaseLLMProvider {
         body: JSON.stringify({
           message: message,
           model: this._currentModel,
-          provider: 'anthropic',
+          provider: 'claude',
           context: context,
           chat_mode: 'langgraph'
         }),

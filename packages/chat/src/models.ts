@@ -8,7 +8,7 @@
 export interface ModelConfig {
   id: string;
   name: string;
-  provider: 'openai' | 'anthropic' | 'google';
+  provider: 'openai' | 'claude' | 'gemini';
   description?: string;
 }
 
@@ -51,32 +51,38 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     description: 'Fast and efficient'
   },
   
-  // Anthropic Models
+  // Claude Models
   {
     id: 'claude-3-5-sonnet-20241022',
     name: 'Claude 3.5 Sonnet',
-    provider: 'anthropic',
-    description: 'Most capable Anthropic model'
+    provider: 'claude',
+    description: 'Most capable Claude model'
   },
   {
     id: 'claude-3-5-haiku-20241022',
     name: 'Claude 3.5 Haiku',
-    provider: 'anthropic',
-    description: 'Fast Anthropic model'
+    provider: 'claude',
+    description: 'Fast Claude model'
   },
   {
     id: 'claude-3-opus-20240229',
     name: 'Claude 3 Opus',
-    provider: 'anthropic',
+    provider: 'claude',
     description: 'Powerful reasoning model'
   },
   
-  // Future: Google Models (placeholder)
+  // Gemini Models
+  {
+    id: 'gemini-2.0-flash-exp',
+    name: 'Gemini 2.0 Flash',
+    provider: 'gemini',
+    description: 'Latest Gemini model with implicit caching'
+  },
   {
     id: 'gemini-pro',
     name: 'Gemini Pro',
-    provider: 'google',
-    description: 'Google\'s advanced model (Coming Soon)'
+    provider: 'gemini',
+    description: 'Google\'s advanced model'
   }
 ];
 

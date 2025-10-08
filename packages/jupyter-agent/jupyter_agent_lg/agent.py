@@ -245,7 +245,7 @@ class JupyterAgent:
             if openai_api_key
             else None
         )
-        self.anthropic_llm = (
+        self.claude_llm = (
             ChatAnthropic(
                 api_key=anthropic_api_key,
                 model="claude-3-5-sonnet-20241022",
@@ -254,6 +254,14 @@ class JupyterAgent:
             if anthropic_api_key
             else None
         )
+        # Gemini support - uncomment when API key available
+        # from langchain_google_genai import ChatGoogleGenerativeAI
+        # self.gemini_llm = ChatGoogleGenerativeAI(
+        #     api_key=gemini_api_key, 
+        #     model="gemini-2.0-flash-exp",
+        #     temperature=0.2
+        # )
+        self.gemini_llm = None
 
         # Create tools and LLMs with tools ONCE
         self.jupyter_tools = create_jupyter_tools(
@@ -344,17 +352,35 @@ class JupyterAgent:
                 )
             except Exception:
                 pass
-        self.anthropic_llm_with_tools = (
-            self.anthropic_llm.bind_tools(
+        
+        self.claude_llm_with_tools = (
+            self.claude_llm.bind_tools(
                 augmented_tools, parallel_tool_calls=False, tool_choice="any"
             )
-            if self.anthropic_llm
+            if self.claude_llm
             else None
         )
-        if self.anthropic_llm_with_tools:
+        if self.claude_llm_with_tools:
             try:
                 setattr(
-                    self.anthropic_llm_with_tools,
+                    self.claude_llm_with_tools,
+                    "_bound_tool_names",
+                    [t.name for t in augmented_tools],
+                )
+            except Exception:
+                pass
+        
+        self.gemini_llm_with_tools = (
+            self.gemini_llm.bind_tools(
+                augmented_tools, parallel_tool_calls=False, tool_choice="any"
+            )
+            if self.gemini_llm
+            else None
+        )
+        if self.gemini_llm_with_tools:
+            try:
+                setattr(
+                    self.gemini_llm_with_tools,
                     "_bound_tool_names",
                     [t.name for t in augmented_tools],
                 )
@@ -656,8 +682,12 @@ class JupyterAgent:
             self.openai_llm_with_tools = self.openai_llm.bind_tools(
                 all_tools, parallel_tool_calls=False
             )
-        if self.anthropic_llm:
-            self.anthropic_llm_with_tools = self.anthropic_llm.bind_tools(
+        if self.claude_llm:
+            self.claude_llm_with_tools = self.claude_llm.bind_tools(
+                all_tools, parallel_tool_calls=False
+            )
+        if self.gemini_llm:
+            self.gemini_llm_with_tools = self.gemini_llm.bind_tools(
                 all_tools, parallel_tool_calls=False
             )
 
@@ -726,12 +756,13 @@ class JupyterAgent:
                         
                         # Save all tool calls uniformly (except CreatePlan which is handled in ToolMessage)
                         if tool_name != "CreatePlan":
-                            messages_to_save.append({
-                                "role": "assistant",
-                                "content": "",  # Empty per OpenAI convention for tool calls
-                                "tool_calls": tool_calls,  # Full tool call structure
-                                "metadata": {"messageType": "tool_call"}
-                            })
+                            # Save COMPLETE message dict for cache integrity
+                            msg_dict = msg.model_dump() if hasattr(msg, "model_dump") else msg.dict() if hasattr(msg, "dict") else {}
+                            # Add our metadata
+                            if "metadata" not in msg_dict:
+                                msg_dict["metadata"] = {}
+                            msg_dict["metadata"]["messageType"] = "tool_call"
+                            messages_to_save.append(msg_dict)
                         # CreatePlan is handled in ToolMessage section below
 
                 # ToolMessage (result from tool execution)
@@ -764,14 +795,13 @@ class JupyterAgent:
                                     })
                                     break
                     else:
-                        # Regular tool message - save as tool result
-                        messages_to_save.append({
-                            "role": "tool",
-                            "content": str(msg.content),
-                            "tool_call_id": getattr(msg, "tool_call_id", None),
-                            "name": tool_name,
-                            "metadata": {"messageType": "tool_result"}
-                        })
+                        # Regular tool message - save COMPLETE dict for cache integrity
+                        msg_dict = msg.model_dump() if hasattr(msg, "model_dump") else msg.dict() if hasattr(msg, "dict") else {}
+                        # Add our metadata
+                        if "metadata" not in msg_dict:
+                            msg_dict["metadata"] = {}
+                        msg_dict["metadata"]["messageType"] = "tool_result"
+                        messages_to_save.append(msg_dict)
 
             # Save to conversation thread if we have messages
             if messages_to_save:
@@ -830,12 +860,12 @@ class JupyterAgent:
                 f"🔍 notebook_path in initial_state: {initial_state.get('notebook_path', 'MISSING')}"
             )
 
-            # Get current notebook state and available data sources
-            initial_state[
-                "notebook_cells"
-            ] = await self.notebook_state_manager.get_complete_notebook_state(
+            # Get current notebook state and available data sources  
+            notebook_multimodal_content = await self.notebook_state_manager.get_complete_notebook_state(
                 notebook_path
             )
+            # Store minimal cell info for state tracking
+            initial_state["notebook_cells"] = [{"index": i} for i in range(len([item for item in notebook_multimodal_content if "Index" in item.get("text", "")]))]
             initial_state[
                 "execution_history"
             ] = await self.notebook_state_manager.get_execution_history(notebook_path)
@@ -989,38 +1019,6 @@ Task Complete: Analysis finished with results
 
 The conversation history shows you everything - read it naturally and respond appropriately to the user's current intent."""
 
-    def _create_context_prompt(self, state: Dict[str, Any]) -> str:
-        """Create context prompt for LLM decision making (notebook state only, no conversation history)"""
-        notebook_summary = self._summarize_notebook(state.get("notebook_cells", []))
-
-        prompt = f"""Current Context:
---------
-Notebook Context Guide:
-
-The notebook state below shows ALL cells with their ACTUAL indices (0-based). This includes:
-- Code cells (executed and not executed)
-- Markdown cells
-- Empty cells
-
-CRITICAL INDEX USAGE:
-- When using delete_cell(cell_index), use the EXACT "Index N" shown below
-- Index numbers match the actual notebook cell positions
-- Do NOT skip or renumber - use the index exactly as shown
-
-Cell Status Indicators:
-- ✅ Code cell (executed #N) = Cell was run successfully (execution count N)
-- ✅ Code cell (executed #N) with outputs = Cell produced results/plots/data
-- ⏸️ Code cell (not executed) = Code cell exists but hasn't been run yet
-- 📝 Markdown cell = Documentation/text cell
-- Empty cells are shown with no content after the index line
-
-Current Notebook State:
-{notebook_summary}
-
-CRITICAL: Use the notebook state to understand what work has already been completed. If a task was interrupted (like plotting x,y through x,y**10), look at which cells are already executed and continue from where you left off. Don't restart from the beginning.
-
-Current Iteration: {state.get("current_iteration", 0)}"""
-        return prompt
 
     async def analyze_and_decide(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Core decision node - LLM analyzes context and decides next action via tool calls"""
@@ -1041,47 +1039,94 @@ Current Iteration: {state.get("current_iteration", 0)}"""
                 state["next_action"] = "respond"
                 return state
 
-            # Always refresh notebook state
-            state[
-                "notebook_cells"
-            ] = await self.notebook_state_manager.get_complete_notebook_state(
+            # Always refresh notebook state - get COMPLETE ready-to-use multimodal content
+            notebook_multimodal_content = await self.notebook_state_manager.get_complete_notebook_state(
                 notebook_path
             )
-            logger.info(
-                f"🧠 [analyze_and_decide] notebook_cells={len(state['notebook_cells'])} for path={notebook_path}"
-            )
+            # Store raw cell count for state (agent logic still needs this for iteration tracking)
+            state["notebook_cells"] = [{"index": i} for i in range(len([item for item in notebook_multimodal_content if "Index" in item.get("text", "")]))]
+            
+            logger.info(f"🧠 [analyze_and_decide] Got {len(notebook_multimodal_content)} multimodal items for path={notebook_path}")
 
             provider = state.get("llm_provider", "openai")
-            llm = (
-                self.openai_llm_with_tools
-                if provider == "openai"
-                else self.anthropic_llm_with_tools
-            )
+            
+            # Select LLM based on provider
+            if provider == "openai":
+                llm = self.openai_llm_with_tools
+            elif provider == "claude":
+                llm = self.claude_llm_with_tools
+            elif provider == "gemini":
+                llm = self.gemini_llm_with_tools
+            else:
+                llm = self.openai_llm_with_tools  # Default fallback
+            
             if not llm:
                 raise ValueError(f"No LLM configured for provider: {provider}")
 
-            # Create system message with instructions only (no conversation history)
+            # Create system message (TEXT ONLY - OpenAI doesn't allow images in system!)
             system_instructions = self._create_system_instructions()
-            context_info = self._create_context_prompt(state)
-            system_message = {
-                "role": "system",
-                "content": f"{system_instructions}\n\n{context_info}",
-            }
+            system_message = {"role": "system", "content": system_instructions}
+            
+            # Create notebook context as USER message (OpenAI requires images in user role!)
+            # This maintains perfect sequence: cell code → outputs → images → next cell
+            notebook_context_content = []
+            notebook_context_content.extend(notebook_multimodal_content)  # Already has everything in sequence!
+            
+            # Add iteration info at the end (NOT cached - changes every turn)
+            notebook_context_content.append({
+                "type": "text", 
+                "text": f"\nCRITICAL: Use the notebook state to understand what work has already been completed. You can SEE the actual plots and charts that were generated. Current Iteration: {state.get('current_iteration', 0)}"
+            })
+            
+            # For Claude: Add cache control to the last stable content item (before iteration info)
+            if provider == "claude" and len(notebook_context_content) > 1:
+                # Mark the last notebook content item (before iteration info) as cacheable
+                last_notebook_item_idx = len(notebook_context_content) - 2  # -2 because we just added iteration info
+                if last_notebook_item_idx >= 0:
+                    notebook_context_content[last_notebook_item_idx]["cache_control"] = {"type": "ephemeral"}
+                    logger.info(f"🔖 Added Anthropic cache_control marker at position {last_notebook_item_idx}")
 
-            # Build complete message history with conversation history as actual messages
-            messages = [system_message]
+            notebook_context_message = {"role": "user", "content": notebook_context_content}
+            
+            # Count images for logging
+            image_count = len([item for item in notebook_context_content if item.get("type") == "image_url"])
+            logger.info(f"🖼️ Created notebook context (USER role) with {len(notebook_context_content)} items ({image_count} images)")
+            
+            # Log COMPLETE notebook context being sent to LLM
+            logger.info("📋 [NOTEBOOK CONTEXT] Complete notebook context being sent to LLM (as USER message):")
+            for i, item in enumerate(notebook_context_content):
+                item_type = item.get("type", "unknown")
+                if item_type == "text":
+                    text_content = item.get("text", "")
+                    logger.info(f"📋 [CONTEXT][{i}] TEXT ({len(text_content)} chars): {text_content}")
+                elif item_type == "image_url":
+                    url = item.get("image_url", {}).get("url", "")
+                    if "data:" in url and "base64," in url:
+                        parts = url.split(";")
+                        mime_type = parts[0].replace("data:", "") if parts else "unknown"
+                        data_part = url.split("base64,")[1] if "base64," in url else ""
+                        data_size = len(data_part)
+                        logger.info(f"📋 [CONTEXT][{i}] IMAGE: {mime_type}, {data_size} base64 chars")
+                    else:
+                        logger.info(f"📋 [CONTEXT][{i}] IMAGE: {url[:100]}...")
 
-            # Add ALL conversation history as actual message objects (not text in system prompt)
+            # Build complete message history: system → notebook → conversation (optimal for caching!)
+            # This order ensures: system cached, notebook cached incrementally, conversation cached
+            messages = [system_message, notebook_context_message]
+
+            # Add ALL conversation history AFTER notebook context
             conversation_history = state.get("conversation_history", [])
             if conversation_history:
                 logger.info(
-                    f"🧠 [analyze_and_decide] Including {len(conversation_history)} conversation messages as actual message objects"
+                    f"🧠 [analyze_and_decide] Including {len(conversation_history)} conversation messages AFTER notebook context"
                 )
                 messages.extend(conversation_history)  # ALL messages from thread
             else:
                 logger.info(
                     "🧠 [analyze_and_decide] No conversation history to include"
                 )
+            
+            logger.info(f"🔄 Message order: system(1) → notebook(1) → conversation({len(conversation_history)}) = {len(messages)} total")
 
             # Note: Current user message is already included in conversation_history
             # Don't add original_request separately - it's just the first message in the thread
@@ -1093,8 +1138,9 @@ Current Iteration: {state.get("current_iteration", 0)}"""
             messages.extend(state["messages"])
 
             logger.info(
-                f"🧠 [analyze_and_decide] Final message count: {len(messages)} (system=1, conversation={len(conversation_history)}, state={len(state['messages'])})"
+                f"🧠 [analyze_and_decide] Final message count: {len(messages)} (system=1, notebook=1, conversation={len(conversation_history)}, state={len(state['messages'])})"
             )
+            logger.info(f"🔖 Cache optimization: System + Notebook prefix stable, conversation grows, state messages appended")
 
             # Log EXACT message structure as it will be sent to LLM (no formatting/truncation)
             import json
@@ -1284,45 +1330,6 @@ Current Iteration: {state.get("current_iteration", 0)}"""
             state["reasoning"] = f"Error sending response: {e}"
             return state
 
-    def _summarize_notebook(self, notebook_cells: List[Dict]) -> str:
-        """Create complete summary of ALL cells with ACTUAL indices (no filtering)"""
-        if not notebook_cells:
-            return "Empty notebook"
-
-        summary = "All Notebook Cells (with actual indices):\n"
-
-        for i, cell in enumerate(notebook_cells):
-            cell_type = cell.get("type", "unknown")
-            source = cell.get("source", "").strip()
-
-            # Include ALL cells with their actual index - FULL CONTENT, NO TRUNCATION
-            if cell_type == "code":
-                # Check if cell was executed (has execution_count)
-                execution_count = cell.get("execution_count")
-                has_outputs = bool(cell.get("outputs"))
-
-                if execution_count is not None:
-                    status = f"✅ Code cell (executed #{execution_count})"
-                    if has_outputs:
-                        status += " with outputs"
-                else:
-                    status = "⏸️ Code cell (not executed)"
-
-                # Show FULL source as-is (empty if empty)
-                summary += f"Index {i}: {status}\n{source}\n\n"
-            
-            elif cell_type == "markdown":
-                # Include markdown cells with FULL content
-                summary += f"Index {i}: 📝 Markdown cell\n{source}\n\n"
-            
-            else:
-                # Include any other cell types with FULL content
-                summary += f"Index {i}: {cell_type} cell\n{source}\n\n"
-
-        # Debug: Log the COMPLETE notebook summary being sent to LLM (no truncation)
-        logger.info(f"📋 [_summarize_notebook] COMPLETE Summary for LLM:\n{summary}")
-
-        return summary
 
     def _generate_summary(self, state: Dict[str, Any]) -> str:
         """Generate analysis summary"""
