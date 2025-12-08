@@ -178,3 +178,10 @@ jlab.*.log
 
 # Local test notebooks not for commit
 test_tools.ipynb
+
+# Debug files
+cache_debug_payloads/
+jupyterlab_startup.log
+=1.53
+*.log
+
