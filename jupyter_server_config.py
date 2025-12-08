@@ -29,10 +29,9 @@ langsmith_key = (
     or os.environ.get("LANGSMITH_API_KEY")
     or os.environ.get("LANGGRAPH_API_KEY")
 )
-if not langsmith_key:
-    # Set LANGCHAIN_API_KEY in your environment or .env file
-    pass
+if langsmith_key:
     os.environ.setdefault("LANGGRAPH_API_KEY", langsmith_key)
+# else: Set LANGCHAIN_API_KEY in your environment or .env file
 
 # Provide a default project name if the caller hasn't already chosen one.
 os.environ.setdefault("LANGCHAIN_PROJECT", "jupyterlab-agent")

@@ -3,11 +3,12 @@ MCP (Model Context Protocol) tools for external data sources
 
 These tools provide access to external databases and services through MCP,
 particularly Snowflake for data querying.
+
+The MCP server only exposes 'execute_query', so all tools use SQL.
 """
 
 from langchain.tools import StructuredTool
 from typing import Optional, List
-import logging
 import json
 
 from ..schemas import SnowflakeQueryArgs, ListTablesArgs
@@ -15,108 +16,108 @@ from ..schemas import SnowflakeQueryArgs, ListTablesArgs
 # Set up proper logging using simplified config
 try:
     from jupyter_tools_bridge.logging_config import get_logger
-
     logger = get_logger()
 except ImportError:
-    # Fallback if centralized logging not available
     import logging
-
     logging.basicConfig(
         level=logging.INFO,
-        format="[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
+        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
     )
     logger = logging.getLogger("jupyterlab")
 
 
-def create_mcp_tools(mcp_client) -> List[StructuredTool]:
-    """
-    Create MCP/Snowflake data access tools
+# Global MCP client - will be initialized when needed
+_mcp_client = None
 
-    Args:
-        mcp_client: MCPClient instance for external data access
+
+def set_mcp_client(client):
+    """Set the global MCP client instance"""
+    global _mcp_client
+    _mcp_client = client
+    logger.info(f"🔌 MCP client set: {client is not None}")
+
+
+def get_mcp_client():
+    """Get the global MCP client instance"""
+    return _mcp_client
+
+
+def create_mcp_tools() -> List[StructuredTool]:
+    """
+    Create MCP/Snowflake data access tools.
+
+    These tools use the global MCP client which should be initialized
+    via set_mcp_client() before the tools are invoked.
+
+    All tools use 'execute_query' MCP tool with SQL since that's
+    the only tool the MCP server exposes.
 
     Returns:
         List of StructuredTool instances for LangChain
     """
 
-    async def query_snowflake(sql: str, limit: Optional[int] = 1000) -> str:
+    async def query_snowflake(query: str, database: str = None, schema_name: str = None) -> str:
         """
         Execute SQL query on Snowflake database.
 
         Args:
-            sql: SQL query to execute
-            limit: Maximum number of rows to return
+            query: SQL query to execute
+            database: Database name (optional)
+            schema_name: Schema name (optional)
 
         Returns:
             Query results as formatted string
         """
         try:
-            # Add limit to query if not present
-            sql_lower = sql.lower()
-            if "limit" not in sql_lower and limit:
-                sql = f"{sql.rstrip(';')} LIMIT {limit}"
+            client = get_mcp_client()
+            if client is None or not client.is_connected():
+                return "Error: MCP client not connected. Please check Snowflake MCP configuration."
 
-            # Execute query
-            result = await mcp_client.query("snowflake", sql)
+            logger.info(f"🔍 Executing Snowflake query: {query[:100]}...")
+
+            # Execute query via MCP's execute_query tool
+            result = await client.call_tool("execute_query", {"query": query})
 
             if not result:
                 return "Query returned no results"
 
-            # Format results for LLM
-            if isinstance(result, list):
-                num_rows = len(result)
-                if num_rows == 0:
-                    return "Query returned 0 rows"
-
-                # Show preview of results
-                preview_rows = min(5, num_rows)
-                preview = result[:preview_rows]
-
-                output = f"Query returned {num_rows} rows. "
-                if num_rows > preview_rows:
-                    output += f"Showing first {preview_rows} rows:\n"
-                else:
-                    output += "Results:\n"
-
-                # Format as readable text
-                output += json.dumps(preview, indent=2, default=str)
-
-                if num_rows > preview_rows:
-                    output += f"\n... and {num_rows - preview_rows} more rows"
-
-                return output
-            else:
-                return f"Query result: {result}"
+            return f"Query result:\n{result}"
 
         except Exception as e:
             logger.error(f"Error in query_snowflake: {e}")
             return f"Error executing query: {str(e)}"
 
-    async def list_snowflake_tables(
-        database: str = None, schema_name: str = None
-    ) -> str:
+    async def list_snowflake_tables(database: str = None, schema_name: str = None) -> str:
         """
         List available tables in Snowflake database.
 
         Args:
             database: Database name (optional)
-            schema_name: Schema name to list tables from
+            schema_name: Schema name to list tables from (optional)
 
         Returns:
             List of available tables
         """
         try:
-            schema = schema_name or "public"
-            tables = await mcp_client.list_tables("snowflake", schema)
+            client = get_mcp_client()
+            if client is None or not client.is_connected():
+                return "Error: MCP client not connected. Please check Snowflake MCP configuration."
 
-            if not tables:
-                return f"No tables found in schema '{schema}'"
+            logger.info(f"🔍 Listing Snowflake tables...")
 
-            output = f"Available tables in '{schema}' schema:\n"
-            for table in tables:
-                output += f"  - {table}\n"
+            # Use SQL to list tables (execute_query is the only MCP tool available)
+            sql = "SHOW TABLES"
+            if schema_name:
+                sql = f"SHOW TABLES IN SCHEMA {schema_name}"
+            if database:
+                sql = f"SHOW TABLES IN DATABASE {database}"
 
-            return output
+            result = await client.call_tool("execute_query", {"query": sql})
+
+            if not result:
+                return "No tables found"
+
+            return f"Available tables:\n{result}"
 
         except Exception as e:
             logger.error(f"Error in list_snowflake_tables: {e}")
@@ -133,28 +134,20 @@ def create_mcp_tools(mcp_client) -> List[StructuredTool]:
             Table schema information
         """
         try:
-            schema_info = await mcp_client.get_schema("snowflake", table_name)
+            client = get_mcp_client()
+            if client is None or not client.is_connected():
+                return "Error: MCP client not connected. Please check Snowflake MCP configuration."
 
-            if not schema_info:
+            logger.info(f"🔍 Getting schema for table: {table_name}")
+
+            # Use SQL to describe table
+            sql = f"DESCRIBE TABLE {table_name}"
+            result = await client.call_tool("execute_query", {"query": sql})
+
+            if not result:
                 return f"No schema information found for table '{table_name}'"
 
-            output = f"Schema for table '{table_name}':\n"
-
-            # Format schema information
-            if isinstance(schema_info, list):
-                for column in schema_info:
-                    col_name = column.get("name", "unknown")
-                    col_type = column.get("type", "unknown")
-                    nullable = column.get("nullable", True)
-
-                    output += f"  - {col_name}: {col_type}"
-                    if not nullable:
-                        output += " (NOT NULL)"
-                    output += "\n"
-            else:
-                output += json.dumps(schema_info, indent=2, default=str)
-
-            return output
+            return f"Schema for table '{table_name}':\n{result}"
 
         except Exception as e:
             logger.error(f"Error in get_table_schema: {e}")
@@ -168,15 +161,20 @@ def create_mcp_tools(mcp_client) -> List[StructuredTool]:
             Database connection and metadata information
         """
         try:
-            info = await mcp_client.get_info("snowflake")
+            client = get_mcp_client()
+            if client is None or not client.is_connected():
+                return "Error: MCP client not connected. Please check Snowflake MCP configuration."
 
-            if not info:
+            logger.info("🔍 Getting database info...")
+
+            # Use SQL to get current context
+            sql = "SELECT CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_WAREHOUSE(), CURRENT_USER()"
+            result = await client.call_tool("execute_query", {"query": sql})
+
+            if not result:
                 return "No database information available"
 
-            output = "Database Information:\n"
-            output += json.dumps(info, indent=2, default=str)
-
-            return output
+            return f"Database Information:\n{result}"
 
         except Exception as e:
             logger.error(f"Error in get_database_info: {e}")
@@ -216,6 +214,6 @@ def create_mcp_tools(mcp_client) -> List[StructuredTool]:
     for tool in tools:
         if not tool.metadata:
             tool.metadata = {}
-        tool.metadata["tool_category"] = "Snowflake MCP Tools"
+        tool.metadata['tool_category'] = "Snowflake MCP Tools"
 
     return tools

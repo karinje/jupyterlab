@@ -338,15 +338,16 @@ class JupyterAgent:
 
         self.system_tools = create_system_tools(self.chat_handler)
 
-        # Optionally: load MCP tools if available
+        # Load MCP tools (client will be initialized per-request)
         try:
             from .tools.mcp_tools import create_mcp_tools
-
-            self.mcp_tools = create_mcp_tools(
-                None
-            )  # TODO: inject real MCP client when ready
-        except Exception:
+            self.mcp_tools = create_mcp_tools()
+        except Exception as e:
+            logger.warning(f"Failed to create MCP tools: {e}")
             self.mcp_tools = []
+
+        # MCP client instance (initialized per-request with config)
+        self._mcp_client = None
 
         original_tools = self.system_tools + self.jupyter_tools + self.mcp_tools
 
@@ -789,11 +790,10 @@ class JupyterAgent:
 
         self.system_tools = create_system_tools(self.chat_handler)
 
-        # Recreate MCP tools if applicable (kept as-is here)
+        # Recreate MCP tools (client is managed separately)
         try:
             from .tools.mcp_tools import create_mcp_tools
-
-            self.mcp_tools = create_mcp_tools(None)
+            self.mcp_tools = create_mcp_tools()
         except Exception:
             self.mcp_tools = []
 
@@ -825,6 +825,41 @@ class JupyterAgent:
             self.current_task.cancel()
             return True
         return False
+
+    async def _initialize_mcp_client(self, mcp_servers: Dict[str, Any]):
+        """Initialize MCP client with server configuration.
+
+        Uses the same MCP server (mcp-snowflake-service/server.py) as OpenAI Agents SDK.
+        """
+        from .mcp_client import MCPClient
+        from .tools.mcp_tools import set_mcp_client
+
+        # Get first server config (typically 'snowflake')
+        for server_name, config in mcp_servers.items():
+            try:
+                # Disconnect existing client if any
+                if self._mcp_client and self._mcp_client.is_connected():
+                    logger.info("🔌 Disconnecting existing MCP client...")
+                    await self._mcp_client.disconnect()
+
+                # Create and connect new client
+                self._mcp_client = MCPClient()
+                success = await self._mcp_client.connect(config, server_name)
+
+                if success:
+                    # Set global client for tools to use
+                    set_mcp_client(self._mcp_client)
+                    logger.info(f"✅ MCP client initialized for '{server_name}'")
+                else:
+                    logger.error(f"❌ Failed to initialize MCP client for '{server_name}'")
+                    self._mcp_client = None
+
+                # Only connect to first server for now
+                break
+
+            except Exception as e:
+                logger.error(f"❌ Error initializing MCP client: {e}")
+                self._mcp_client = None
 
     async def _persist_tool_messages(
         self, final_state: Dict[str, Any], notebook_path: str, thread_id: str
@@ -980,6 +1015,39 @@ class JupyterAgent:
 
             logger.error(f"Traceback: {traceback.format_exc()}")
 
+    async def _initialize_mcp_client(self, mcp_servers: Dict[str, Any]) -> None:
+        """
+        Initialize MCP client with server config.
+        Uses the same server.py as OpenAI Agents SDK.
+        """
+        try:
+            from .mcp_client import MCPClient
+            from .tools.mcp_tools import set_mcp_client
+
+            # Get first server config (usually 'snowflake')
+            for server_name, config in mcp_servers.items():
+                logger.info(f"🔌 Initializing MCP client for '{server_name}'...")
+
+                # Create and connect MCP client
+                mcp_client = MCPClient()
+                connected = await mcp_client.connect(config, server_name)
+
+                if connected:
+                    # Set global client for tools to use
+                    set_mcp_client(mcp_client)
+                    self._mcp_client = mcp_client
+                    logger.info(f"✅ MCP client connected and ready for '{server_name}'")
+                else:
+                    logger.warning(f"⚠️ Failed to connect MCP client for '{server_name}'")
+
+                # Only connect to first server for now
+                break
+
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize MCP client: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+
     async def process_request(
         self,
         request: str,
@@ -1007,6 +1075,10 @@ class JupyterAgent:
                 pass
             # Keep internal default in sync to avoid repeated updates on subsequent turns
             self.default_notebook_path = notebook_path
+
+            # Initialize MCP client if config provided
+            if mcp_servers and len(mcp_servers) > 0:
+                await self._initialize_mcp_client(mcp_servers)
 
             # Initialize state
             initial_state = create_initial_state(

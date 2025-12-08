@@ -2005,16 +2005,35 @@ class ChatAgentHandler(APIHandler):
         thread_id: str = None,
     ) -> str:
         """Run LangGraph agent workflow"""
+        import sys
+        import os
+        import asyncio
+
         try:
             logger.info("🚀 STEP 1: CALLING LANGGRAPH AGENT")
 
-            # Add the jupyter-agent package to Python path for dev mode
-            logger.info("🚀 STEP 2: IMPORTING MODULES")
-            import sys
-            import os
-            import asyncio
+            # Load MCP settings from JupyterLab settings file if not provided
+            if not mcp_servers_config:
+                settings_dir = self.settings.get(
+                    "jupyter_config_dir", os.path.expanduser("~/.jupyter")
+                )
+                lab_settings_dir = os.path.join(settings_dir, "lab", "user-settings")
+                chat_settings_file = os.path.join(
+                    lab_settings_dir,
+                    "@jupyterlab",
+                    "chat-extension",
+                    "plugin.jupyterlab-settings",
+                )
+                if os.path.exists(chat_settings_file):
+                    with open(chat_settings_file) as f:
+                        settings_data = json.load(f)
+                        settings_mcp_servers = settings_data.get("mcpServers", {})
+                        if settings_mcp_servers:
+                            mcp_servers_config = settings_mcp_servers
+                            logger.info(f"📋 Loaded MCP servers from settings: {list(mcp_servers_config.keys())}")
 
-            logger.info("🚀 STEP 3: SETTING UP PYTHON PATH")
+            # Add the jupyter-agent package to Python path for dev mode
+            logger.info("🚀 STEP 2: SETTING UP PYTHON PATH")
             # Get the absolute path to the jupyter-agent package
             current_dir = os.path.dirname(os.path.abspath(__file__))
             jupyter_agent_path = os.path.join(current_dir, "..", "..", "jupyter-agent")

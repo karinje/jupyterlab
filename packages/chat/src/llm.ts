@@ -67,7 +67,7 @@ export class OpenAIProvider extends BaseLLMProvider {
             message: message,
             model: this._getSelectedModel(), // Use selected model from dropdown
             provider: this._getSelectedProvider(), // Add provider selection
-            mcpServers: {}, // Temporarily disable MCP to isolate LangGraph
+            mcpServers: this.mcpServers, // MCP servers from settings
             context: context,
             chat_mode: 'langgraph' // Add chat mode selection
           }),
