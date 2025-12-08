@@ -790,9 +790,13 @@ export class ChatManager {
   private async _showConnectionInfo(): Promise<void> {
     try {
       // Get notebook name from chat service
-      const notebookPath =
+      let notebookPath =
         (this._chatService as any)._cellManager?.getActiveNotebookPath?.() ||
         'Untitled.ipynb';
+      // Strip RTC: prefix if present (from collaborative mode)
+      if (notebookPath.startsWith('RTC:')) {
+        notebookPath = notebookPath.replace('RTC:', '');
+      }
       const notebookName = notebookPath.split('/').pop() || notebookPath;
 
       // Get available tools
@@ -811,9 +815,13 @@ export class ChatManager {
     } catch (error) {
       console.error('Error showing connection info:', error);
       // Fallback connection message
-      const notebookPath =
+      let notebookPath =
         (this._chatService as any)._cellManager?.getActiveNotebookPath?.() ||
         'Untitled.ipynb';
+      // Strip RTC: prefix if present (from collaborative mode)
+      if (notebookPath.startsWith('RTC:')) {
+        notebookPath = notebookPath.replace('RTC:', '');
+      }
       const notebookName = notebookPath.split('/').pop() || notebookPath;
       this._addConnectionMessage(`Connected to notebook ${notebookName}`);
     }

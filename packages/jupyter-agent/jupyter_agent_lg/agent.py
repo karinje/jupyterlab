@@ -8,6 +8,8 @@ with dynamic planning and user interaction.
 
 import asyncio
 import logging
+import os
+import json
 from typing import Dict, Any, List, Optional
 from langgraph.graph import StateGraph, END
 from datetime import datetime
@@ -18,6 +20,9 @@ from .tools import create_jupyter_tools
 from jupyter_tools_bridge.tools import JupyterTools
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
+from langchain_core.callbacks import CallbackManagerForLLMRun, AsyncCallbackManagerForLLMRun
+from langchain_core.messages import BaseMessage
+from langchain_core.outputs import ChatResult
 from pydantic import create_model, Field, BaseModel
 
 # Set up proper logging using simplified config
@@ -205,6 +210,51 @@ class ChatHandler:
             logger.warning(f"Failed to save thread title: {e}")
 
 
+class LoggingChatOpenAI(ChatOpenAI):
+    """ChatOpenAI variant that logs raw request payloads when enabled."""
+
+    @staticmethod
+    def _logging_enabled() -> bool:
+        flag = (os.environ.get("JLAB_AGENT_LOG_OPENAI_PAYLOADS") or "").strip().lower()
+        return flag in {"1", "true", "yes"}
+
+    @staticmethod
+    def _log_payload(payload: Dict[str, Any]) -> None:
+        try:
+            payload_json = json.dumps(payload, ensure_ascii=False)
+            logger.info("📤 [OpenAI Request] %s", payload_json)
+        except Exception as exc:  # pragma: no cover - debug guard
+            logger.warning(f"Failed to log OpenAI payload: {exc}")
+
+    def _generate(
+        self,
+        messages: List["BaseMessage"],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional["CallbackManagerForLLMRun"] = None,
+        **kwargs: Any,
+    ) -> "ChatResult":
+        if self._logging_enabled():
+            payload = self._get_request_payload(messages, stop=stop, **kwargs)
+            self._log_payload(payload)
+        return super()._generate(
+            messages, stop=stop, run_manager=run_manager, **kwargs
+        )
+
+    async def _agenerate(
+        self,
+        messages: List["BaseMessage"],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional["AsyncCallbackManagerForLLMRun"] = None,
+        **kwargs: Any,
+    ) -> "ChatResult":
+        if self._logging_enabled():
+            payload = self._get_request_payload(messages, stop=stop, **kwargs)
+            self._log_payload(payload)
+        return await super()._agenerate(
+            messages, stop=stop, run_manager=run_manager, **kwargs
+        )
+
+
 class JupyterAgent:
     """
     LangGraph-based agent for Jupyter notebook tasks
@@ -217,6 +267,9 @@ class JupyterAgent:
     - Multi-LLM support
     """
 
+    _logging_configured = False
+    _tracing_configured = False
+
     def __init__(
         self,
         server_url: str,
@@ -225,11 +278,18 @@ class JupyterAgent:
         anthropic_api_key: Optional[str] = None,
         default_notebook_path: str = "analysis.ipynb",
         chat_handler: Optional[ChatHandler] = None,
+        mcp_servers_config: Optional[Dict[str, Any]] = None,
     ):
         self.server_url = server_url
         self.token = token
         self.default_notebook_path = default_notebook_path
         self.current_task = None  # Track current processing task for cancellation
+        self.mcp_servers_config = mcp_servers_config or {}
+        self.mcp_client = None  # Will be initialized lazily
+
+        # Optional diagnostics (env-controlled)
+        self._configure_logging()
+        self._configure_tracing()
 
         # Initialize components
         self.notebook_state_manager = NotebookStateManager(server_url, token)
@@ -241,10 +301,12 @@ class JupyterAgent:
 
         # Initialize LLMs directly
         self.openai_llm = (
-            ChatOpenAI(api_key=openai_api_key, model="gpt-4o", temperature=0.2)
+            LoggingChatOpenAI(api_key=openai_api_key, model="gpt-4o", temperature=0.2)
             if openai_api_key
             else None
         )
+        if self.openai_llm and LoggingChatOpenAI._logging_enabled():
+            logger.info("🛰️ Raw OpenAI payload logging enabled (via LoggingChatOpenAI)")
         self.claude_llm = (
             ChatAnthropic(
                 api_key=anthropic_api_key,
@@ -397,6 +459,63 @@ class JupyterAgent:
         # Store tool info for API access
         self._bound_tools = original_tools
         self._tool_categories = self._categorize_tools(original_tools)
+
+    def _configure_logging(self) -> None:
+        """Enable optional verbose logging via env flag."""
+        if JupyterAgent._logging_configured:
+            return
+
+        flag = (os.environ.get("JLAB_AGENT_DEBUG_LLMS") or "").strip().lower()
+        if flag in {"1", "true", "yes"}:
+            os.environ.setdefault("LANGCHAIN_VERBOSE", "true")
+            logging.getLogger("httpx").setLevel(logging.DEBUG)
+            logger.info("🔍 LangChain verbose logging enabled (httpx level=DEBUG)")
+        JupyterAgent._logging_configured = True
+
+    def _configure_tracing(self) -> None:
+        """Wire LangSmith/LangGraph tracing when requested."""
+        if JupyterAgent._tracing_configured:
+            return
+
+        flag = (os.environ.get("JLAB_AGENT_ENABLE_TRACING") or "").strip().lower()
+        if flag not in {"1", "true", "yes"}:
+            JupyterAgent._tracing_configured = True
+            return
+
+        api_key = (
+            os.environ.get("LANGCHAIN_API_KEY")
+            or os.environ.get("LANGSMITH_API_KEY")
+            or os.environ.get("LANGGRAPH_API_KEY")
+        )
+
+        if not api_key:
+            logger.warning(
+                "Tracing requested but no LangSmith/LangGraph API key provided. "
+                "Set LANGCHAIN_API_KEY (or LANGSMITH_API_KEY / LANGGRAPH_API_KEY)."
+            )
+            JupyterAgent._tracing_configured = True
+            return
+
+        os.environ.setdefault("LANGCHAIN_API_KEY", api_key)
+        os.environ.setdefault("LANGSMITH_API_KEY", api_key)
+        os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+        os.environ.setdefault("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
+
+        project = (
+            os.environ.get("LANGCHAIN_PROJECT")
+            or os.environ.get("LANGSMITH_PROJECT")
+            or os.environ.get("LANGGRAPH_PROJECT")
+        )
+        if project:
+            os.environ.setdefault("LANGCHAIN_PROJECT", project)
+        else:
+            os.environ.setdefault("LANGCHAIN_PROJECT", "jupyterlab-agent")
+
+        logger.info(
+            "📡 LangSmith tracing enabled (project=%s)",
+            os.environ.get("LANGCHAIN_PROJECT"),
+        )
+        JupyterAgent._tracing_configured = True
 
     def _categorize_tools(self, tools) -> Dict[str, list]:
         """Categorize tools by their metadata - NO HARDCODING!"""
@@ -753,14 +872,24 @@ class JupyterAgent:
                     tool_calls = msg.tool_calls
                     if tool_calls:
                         tool_name = tool_calls[0].get("name")
-                        
+
                         # Save all tool calls uniformly (except CreatePlan which is handled in ToolMessage)
                         if tool_name != "CreatePlan":
                             # Save COMPLETE message dict for cache integrity
-                            msg_dict = msg.model_dump() if hasattr(msg, "model_dump") else msg.dict() if hasattr(msg, "dict") else {}
+                            msg_dict = (
+                                msg.model_dump()
+                                if hasattr(msg, "model_dump")
+                                else msg.dict()
+                                if hasattr(msg, "dict")
+                                else {}
+                            )
+                            # Attach response metadata (token usage, cache info, etc.)
+                            usage = getattr(msg, "response_metadata", None)
+                            if usage:
+                                msg_dict.setdefault("metadata", {})
+                                msg_dict["metadata"]["usage"] = usage
                             # Add our metadata
-                            if "metadata" not in msg_dict:
-                                msg_dict["metadata"] = {}
+                            msg_dict.setdefault("metadata", {})
                             msg_dict["metadata"]["messageType"] = "tool_call"
                             messages_to_save.append(msg_dict)
                         # CreatePlan is handled in ToolMessage section below
@@ -787,19 +916,31 @@ class JupyterAgent:
                                         description = step.get("description", "")
                                         plan_content += f"[CARD:{title}|{description}]\n"
                                     
-                                    # Save as user message (so LLM treats it as instructions)
-                                    messages_to_save.append({
+                                    plan_message = {
                                         "role": "user",
                                         "content": plan_content.strip(),
                                         "metadata": {"messageType": "plan"}
-                                    })
+                                    }
+                                    usage = getattr(msg, "response_metadata", None) or getattr(prev_msg, "response_metadata", None)
+                                    if usage:
+                                        plan_message["metadata"]["usage"] = usage
+                                    messages_to_save.append(plan_message)
                                     break
                     else:
                         # Regular tool message - save COMPLETE dict for cache integrity
-                        msg_dict = msg.model_dump() if hasattr(msg, "model_dump") else msg.dict() if hasattr(msg, "dict") else {}
+                        msg_dict = (
+                            msg.model_dump()
+                            if hasattr(msg, "model_dump")
+                            else msg.dict()
+                            if hasattr(msg, "dict")
+                            else {}
+                        )
+                        usage = getattr(msg, "response_metadata", None)
+                        if usage:
+                            msg_dict.setdefault("metadata", {})
+                            msg_dict["metadata"]["usage"] = usage
                         # Add our metadata
-                        if "metadata" not in msg_dict:
-                            msg_dict["metadata"] = {}
+                        msg_dict.setdefault("metadata", {})
                         msg_dict["metadata"]["messageType"] = "tool_result"
                         messages_to_save.append(msg_dict)
 
@@ -1073,11 +1214,13 @@ The conversation history shows you everything - read it naturally and respond ap
             notebook_context_content.extend(notebook_multimodal_content)  # Already has everything in sequence!
             
             # Add iteration info at the end (NOT cached - changes every turn)
-            notebook_context_content.append({
-                "type": "text", 
-                "text": f"\nCRITICAL: Use the notebook state to understand what work has already been completed. You can SEE the actual plots and charts that were generated. Current Iteration: {state.get('current_iteration', 0)}"
-            })
-            
+            notebook_context_content.append(
+                {
+                    "type": "text",
+                    "text": f"\nCRITICAL: Use the notebook state to understand what work has already been completed. You can SEE the actual plots and charts that were generated. Current Iteration: {state.get('current_iteration', 0)}",
+                }
+            )
+
             # For Claude: Add cache control to the last stable content item (before iteration info)
             if provider == "claude" and len(notebook_context_content) > 1:
                 # Mark the last notebook content item (before iteration info) as cacheable

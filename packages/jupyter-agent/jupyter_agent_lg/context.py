@@ -36,6 +36,12 @@ class NotebookStateManager:
         self.max_text_plain_chars: int = 10000  # execute_result/display_data text/plain
         self.max_stream_chars: int = 5000  # stream text
 
+    def _normalize_notebook_path(self, notebook_path: str) -> str:
+        """Strip RTC: prefix from notebook paths for Contents API compatibility"""
+        if notebook_path and notebook_path.startswith("RTC:"):
+            return notebook_path[4:]  # Remove "RTC:" prefix
+        return notebook_path
+
     async def get_complete_notebook_state(self, notebook_path: str) -> List[Dict]:
         """Get all cells ready for LLM context - ONE PASS, NO REDUNDANCY
         
@@ -43,6 +49,9 @@ class NotebookStateManager:
             List[Dict]: cells with everything needed for multimodal LLM
         """
         try:
+            # Normalize path (strip RTC: prefix)
+            notebook_path = self._normalize_notebook_path(notebook_path)
+            
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self.server_url}/api/contents/{notebook_path}",
@@ -83,8 +92,8 @@ The notebook state below shows ALL cells with their ACTUAL indices (0-based). Th
 - Images from plots/charts (you can see these images directly)
 
 CRITICAL INDEX USAGE:
-- When using delete_cell(cell_index), use the EXACT "Index N" shown below
-- Index numbers match the actual notebook cell positions
+- Cell indices shown as "Cell [N]" are 0-based positions in the notebook
+- When using delete_cell(cell_index), use the EXACT index N shown in "Cell [N]"
 - Do NOT skip or renumber - use the index exactly as shown
 
 Cell Status Indicators:
@@ -92,10 +101,10 @@ Cell Status Indicators:
 - ✅ Code cell (executed #N) with outputs = Cell produced results/plots/data
 - ⏸️ Code cell (not executed) = Code cell exists but hasn't been run yet
 - 📝 Markdown cell = Documentation/text cell
-- Empty cells are shown with no content after the index line
+- Empty cells are shown with no content after the cell header
 
 Current Notebook State:
-All Notebook Cells (with actual indices):
+All Notebook Cells (0-based indexing):
 """
         }]
         
@@ -124,12 +133,13 @@ All Notebook Cells (with actual indices):
                 else:
                     status = "⏸️ Code cell (not executed)"
                 
-                cell_text = f"Index {i}: {status}\n{source_text}\n"
+                cell_text = f"Cell [{i}]: {status}\n{source_text}\n"
                 
                 # Process outputs and extract images
+                cell_has_any_images = False
                 if raw_outputs:
                     cell_text += "  Outputs:\n"
-                    for output in raw_outputs:
+                    for output_idx, output in enumerate(raw_outputs):
                         output_type = output.get("output_type", "unknown")
                         
                         if output_type == "error":
@@ -168,31 +178,34 @@ All Notebook Cells (with actual indices):
                                     if shape_match:
                                         cell_text += f"    📊 DataFrame: {shape_match.group(1)} rows × {shape_match.group(2)} columns\n"
                             
-                            # Images - add to content AND extract for multimodal
-                            has_image = False
-                            if "image/png" in data:
-                                png_data = data["image/png"]
-                                if isinstance(png_data, str) and png_data:
-                                    complete_content.append({"type": "text", "text": cell_text})
-                                    complete_content.append({
-                                        "type": "image_url",
-                                        "image_url": {"url": f"data:image/png;base64,{png_data}"}
-                                    })
-                                    has_image = True
-                                    
-                            if "image/jpeg" in data:
-                                jpeg_data = data["image/jpeg"]
-                                if isinstance(jpeg_data, str) and jpeg_data:
-                                    if not has_image:  # Don't add text twice
-                                        complete_content.append({"type": "text", "text": cell_text})
-                                    complete_content.append({
-                                        "type": "image_url", 
-                                        "image_url": {"url": f"data:image/jpeg;base64,{jpeg_data}"}
-                                    })
-                                    has_image = True
+                            # Check for images in this output
+                            output_has_images = "image/png" in data or "image/jpeg" in data
                             
-                            if has_image:
-                                cell_text += f"    📊 [IMAGE] Chart/Plot - You can see this image\n"
+                            if output_has_images:
+                                # Add accumulated cell_text before images
+                                if not cell_has_any_images:
+                                    # First image in cell - add all the cell text so far
+                                    complete_content.append({"type": "text", "text": cell_text})
+                                    cell_has_any_images = True
+                                    
+                                # Add each image type that exists in this output
+                                if "image/png" in data:
+                                    png_data = data["image/png"]
+                                    if isinstance(png_data, str) and png_data:
+                                        complete_content.append({
+                                            "type": "image_url",
+                                            "image_url": {"url": f"data:image/png;base64,{png_data}"}
+                                        })
+                                        cell_text += f"    📊 [IMAGE {output_idx + 1}] PNG Chart/Plot - You can see this image\n"
+                                        
+                                if "image/jpeg" in data:
+                                    jpeg_data = data["image/jpeg"]
+                                    if isinstance(jpeg_data, str) and jpeg_data:
+                                        complete_content.append({
+                                            "type": "image_url", 
+                                            "image_url": {"url": f"data:image/jpeg;base64,{jpeg_data}"}
+                                        })
+                                        cell_text += f"    📊 [IMAGE {output_idx + 1}] JPEG Chart/Plot - You can see this image\n"
                             
                             # JSON data
                             if "application/json" in data:
@@ -202,16 +215,20 @@ All Notebook Cells (with actual indices):
                                 else:
                                     cell_text += f"    📋 JSON data (size: {len(str(json_data))})\n"
                 
-                # Add cell text if no images were found
-                if not any("image/" in output.get("data", {}) for output in raw_outputs if output.get("data")):
+                # Add final cell text only if we didn't already add it for images
+                if not cell_has_any_images:
                     complete_content.append({"type": "text", "text": cell_text + "\n"})
+                else:
+                    # We already added text before images, but may have accumulated more text after
+                    # Add any trailing text that came after images
+                    complete_content.append({"type": "text", "text": "\n"})
             
             elif cell_type == "markdown":
-                cell_text = f"Index {i}: 📝 Markdown cell\n{source_text}\n\n"
+                cell_text = f"Cell [{i}]: 📝 Markdown cell\n{source_text}\n\n"
                 complete_content.append({"type": "text", "text": cell_text})
             
             else:
-                cell_text = f"Index {i}: {cell_type} cell\n{source_text}\n\n"
+                cell_text = f"Cell [{i}]: {cell_type} cell\n{source_text}\n\n"
                 complete_content.append({"type": "text", "text": cell_text})
 
         return complete_content

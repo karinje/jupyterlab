@@ -51,7 +51,12 @@ export class CellManager implements ICellManager {
     console.log('🔍 [CellManager] currentWidget:', panel);
     console.log('🔍 [CellManager] panel.context:', panel?.context);
     console.log('🔍 [CellManager] panel.context.path:', panel?.context?.path);
-    const currentPath = (panel && panel.context && panel.context.path) || null;
+    let currentPath = (panel && panel.context && panel.context.path) || null;
+    // Strip RTC: prefix if present (from collaborative mode YDoc)
+    if (currentPath && currentPath.startsWith('RTC:')) {
+      currentPath = currentPath.replace('RTC:', '');
+      console.log('🔍 [CellManager] stripped RTC: prefix, now:', currentPath);
+    }
     console.log('🔍 [CellManager] resolved currentPath:', currentPath);
     const lastPath = (this as any)._lastNotebookPath;
     console.log('🔍 [CellManager] lastNotebookPath:', lastPath);

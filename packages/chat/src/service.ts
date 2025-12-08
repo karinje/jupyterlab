@@ -57,7 +57,10 @@ export class ChatService implements IChatService {
 
     // Cancel any current request before sending new message (ChatGPT-like behavior)
     // Use 'interrupt' intent to preserve thread continuity
-    await this._cancelCurrentRequest('interrupt');
+    // Only cancel if there's actually a request in progress
+    if (this._currentRequest || this._currentAbortController) {
+      await this._cancelCurrentRequest('interrupt');
+    }
 
     // Add user message
     const userMessage: IChatMessage = {
@@ -142,6 +145,11 @@ export class ChatService implements IChatService {
     intent: 'interrupt' | 'switch' | 'notebook_switch' = 'interrupt',
     newThreadId?: string
   ): Promise<void> {
+    // Only cancel if there's actually a request in progress
+    if (!this._currentRequest && !this._currentAbortController) {
+      return; // No active request to cancel
+    }
+
     console.log(
       `🛑 Cancelling current request with intent: ${intent}${
         newThreadId ? `, newThreadId: ${newThreadId}` : ''

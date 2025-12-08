@@ -215,9 +215,18 @@ class ConversationManager:
         self.serverapp = serverapp
         self._xsrf_token = None
 
+    def _normalize_notebook_path(self, notebook_path: str) -> str:
+        """Strip RTC: prefix from notebook paths for Contents API compatibility"""
+        if notebook_path and notebook_path.startswith("RTC:"):
+            return notebook_path[4:]  # Remove "RTC:" prefix
+        return notebook_path
+
     async def load_conversation_history(self, notebook_path: str) -> Dict:
         """Load conversation threads from notebook metadata"""
         try:
+            # Normalize path (strip RTC: prefix)
+            notebook_path = self._normalize_notebook_path(notebook_path)
+            
             # Get notebook content via Contents API
             import aiohttp
 
@@ -454,6 +463,9 @@ class ConversationManager:
     ):
         """Save conversations back to notebook metadata using Contents API for consistency with load_conversation_history"""
         try:
+            # Normalize path (strip RTC: prefix)
+            notebook_path = self._normalize_notebook_path(notebook_path)
+            
             # Use same pattern as load_conversation_history - Contents API via HTTP
             import aiohttp
 
@@ -1431,7 +1443,12 @@ class ChatAgentHandler(APIHandler):
             mcp_servers_config = body.get("mcpServers", {})
             context = body.get("context", {})
             notebook_path = context.get("notebook_path")
-            logger.info(f"notebook_path (from frontend context): {notebook_path}")
+            # Normalize path (strip RTC: prefix for Contents API and tools compatibility)
+            if notebook_path and notebook_path.startswith("RTC:"):
+                notebook_path = notebook_path[4:]
+                logger.info(f"notebook_path (normalized from RTC:): {notebook_path}")
+            else:
+                logger.info(f"notebook_path (from frontend context): {notebook_path}")
 
             # DEBUG: Log the entire context to see what we're receiving
             logger.info(f"🔍 DEBUG: Full context received: {context}")

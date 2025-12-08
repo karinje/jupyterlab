@@ -90,17 +90,19 @@ def create_mcp_tools(mcp_client) -> List[StructuredTool]:
             logger.error(f"Error in query_snowflake: {e}")
             return f"Error executing query: {str(e)}"
 
-    async def list_snowflake_tables(schema: str = "public") -> str:
+    async def list_snowflake_tables(database: str = None, schema_name: str = None) -> str:
         """
         List available tables in Snowflake database.
 
         Args:
-            schema: Database schema to list tables from
+            database: Database name (optional)
+            schema_name: Schema name to list tables from
 
         Returns:
             List of available tables
         """
         try:
+            schema = schema_name or "public"
             tables = await mcp_client.list_tables("snowflake", schema)
 
             if not tables:
