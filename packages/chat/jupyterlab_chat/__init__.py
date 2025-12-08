@@ -226,7 +226,7 @@ class ConversationManager:
         try:
             # Normalize path (strip RTC: prefix)
             notebook_path = self._normalize_notebook_path(notebook_path)
-            
+
             # Get notebook content via Contents API
             import aiohttp
 
@@ -465,7 +465,7 @@ class ConversationManager:
         try:
             # Normalize path (strip RTC: prefix)
             notebook_path = self._normalize_notebook_path(notebook_path)
-            
+
             # Use same pattern as load_conversation_history - Contents API via HTTP
             import aiohttp
 
@@ -805,27 +805,29 @@ class ChatThreadsHandler(APIHandler):
                 conversation_messages = []
                 for msg in messages:
                     message_type = msg.get("metadata", {}).get("messageType")
-                    
+
                     # Check if this is a RespondToUser tool call (should be counted/displayed)
                     is_respond_to_user = (
-                        message_type == "tool_call" and 
-                        msg.get("tool_calls") and 
-                        len(msg.get("tool_calls", [])) > 0 and
-                        msg["tool_calls"][0].get("name") == "RespondToUser"
+                        message_type == "tool_call"
+                        and msg.get("tool_calls")
+                        and len(msg.get("tool_calls", [])) > 0
+                        and msg["tool_calls"][0].get("name") == "RespondToUser"
                     )
-                    
+
                     # Filter out tool messages (except RespondToUser), status messages
                     if message_type == "tool_call" and not is_respond_to_user:
                         continue  # Skip non-RespondToUser tool calls
                     if message_type == "tool_result" or message_type == "status":
                         continue  # Skip tool results and status messages
-                    
+
                     # Backward compatibility: filter legacy tool messages
                     if not message_type and msg.get("role") == "tool":
                         continue
-                    if not message_type and msg.get("content", "").startswith("responded: intent="):
+                    if not message_type and msg.get("content", "").startswith(
+                        "responded: intent="
+                    ):
                         continue
-                    
+
                     conversation_messages.append(msg)
 
                 # Get thread metadata
@@ -1191,6 +1193,7 @@ class ChatSaveToolMessagesHandler(APIHandler):
         except Exception as e:
             logger.error(f"❌ Error saving tool messages: {e}")
             import traceback
+
             logger.error(f"Traceback: {traceback.format_exc()}")
             self.set_status(500)
             self.finish({"error": str(e)})

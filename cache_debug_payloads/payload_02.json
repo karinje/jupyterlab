@@ -1,0 +1,396 @@
+{
+  "model": "gpt-4.1",
+  "stream": false,
+  "temperature": 0.2,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "RespondToUser",
+        "description": "MANDATORY: Send a message to the user. This is the ONLY way to communicate with the user.\n\nCRITICAL: You MUST use this tool for ANY response to the user. Never generate plain text responses - they will not reach the chat interface and the user will never see them.\n\nUse for:\n- Asking clarifying questions (intent=\"clarification\")\n- Providing status updates (intent=\"status_update\") \n- Completing tasks (intent=\"completion\")\n- Explaining results or next steps\n- ANY communication intended for the user\n\nAlways include a descriptive thread_title (3-8 words) summarizing the conversation topic.\nExamples: \"Sales Data Analysis\", \"ML Model Training\", \"Database Query Help\".\n\nREMEMBER: Plain text responses are invisible to users - always use this tool!",
+        "parameters": {
+          "properties": {
+            "message": {
+              "description": "Message to show to the user in chat",
+              "type": "string"
+            },
+            "intent": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "completion",
+                    "clarification",
+                    "status_update"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional intent tag for the response"
+            },
+            "thread_title": {
+              "description": "REQUIRED: Generate a concise, descriptive title (3-8 words) summarizing this conversation topic. Examples: 'Data visualization plots', 'Sales analysis discussion', 'Python debugging help'",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "thread_title"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CreatePlan",
+        "description": "Create interactive plan cards for multi-step tasks. Use when:\n- Task requires 3+ distinct operations\n- User input would improve the approach\n- Complex analysis needs user review\n- Ambiguous requests need clarification\n\nEach plan step should be:\n- Specific and actionable (1-2 sentences maximum)\n- Clear about expected outcome\n- Ordered logically (3-7 steps optimal)\n\nThe user can edit these cards before you proceed. When user says \"proceed\",\nimplement the EDITED cards, not the original request.",
+        "parameters": {
+          "properties": {
+            "plan_steps": {
+              "description": "List of plan steps to render as editable cards",
+              "items": {
+                "description": "Individual step in an analysis plan",
+                "properties": {
+                  "title": {
+                    "description": "Brief title for this step",
+                    "type": "string"
+                  },
+                  "description": {
+                    "description": "Detailed description of what this step involves",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "description"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "plan_steps"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "insert_and_execute_cell",
+        "description": "Insert and execute Python code in Jupyter notebook. Use for:\n- Data analysis, visualization, computation\n- Installing packages, importing libraries\n- Any Python operation that produces output\n- Building on previous notebook work\n\nOUTPUTS: execution_count (shows cell order), text/DataFrame/plot outputs, real-time cell in UI\nCONTEXT: Check notebook state first, build incrementally on existing work, use meaningful variable names",
+        "parameters": {
+          "properties": {
+            "code": {
+              "description": "Python code to insert and execute",
+              "type": "string"
+            },
+            "cell_type": {
+              "default": "code",
+              "description": "Type of cell to insert",
+              "enum": [
+                "code",
+                "markdown"
+              ],
+              "type": "string"
+            },
+            "position": {
+              "default": "end",
+              "description": "Where to insert the cell: 'start' for beginning, 'end' for bottom",
+              "enum": [
+                "start",
+                "end"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "code"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_cell",
+        "description": "Remove cells from notebook. Use for:\n- Cleaning up failed experiments\n- Removing duplicate or obsolete code\n- Correcting mistakes in cell sequence\n\nUse sparingly - prefer creating new cells over deleting.\nVerify cell index carefully to avoid deleting wrong content.",
+        "parameters": {
+          "properties": {
+            "cell_index": {
+              "description": "Index of the cell to delete (0-based)",
+              "type": "integer"
+            },
+            "status_message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Brief status message describing what you're deleting (e.g., 'Removing failed analysis cell')"
+            }
+          },
+          "required": [
+            "cell_index"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_and_execute_cell",
+        "description": "Update existing cell source code and execute it. Use for:\n- Modifying code in existing cells and seeing new results\n- Fixing errors in previously written code\n- Changing analysis parameters and re-running\n- Iterating on visualizations or computations\n\nThe cell source is updated, then immediately executed to show new outputs.\nUse cell index to target the specific cell to update.",
+        "parameters": {
+          "properties": {
+            "cell_index": {
+              "description": "Index of the cell to update (0-based)",
+              "type": "integer"
+            },
+            "source": {
+              "description": "New source code for the cell (will be executed after update)",
+              "type": "string"
+            },
+            "status_message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Brief status message describing what you're updating (e.g., 'Fixing code error in analysis')"
+            }
+          },
+          "required": [
+            "cell_index",
+            "source"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "insert_markdown",
+        "description": "Insert markdown documentation into notebook. Use for:\n- Adding explanatory text and documentation\n- Creating section headers and organizing content\n- Documenting analysis steps and methodology\n- Adding formatted text, equations, or descriptions\n\nMarkdown supports headers (#), lists, code blocks, math equations, and formatting.\nUse to make notebooks more readable and well-documented.",
+        "parameters": {
+          "properties": {
+            "markdown": {
+              "description": "Markdown content to insert",
+              "type": "string"
+            },
+            "position": {
+              "default": "end",
+              "description": "Where to insert the cell: 'start' for beginning, 'end' for bottom",
+              "enum": [
+                "start",
+                "end"
+              ],
+              "type": "string"
+            },
+            "status_message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Brief status message describing what documentation you're adding (e.g., 'Adding analysis explanation')"
+            }
+          },
+          "required": [
+            "markdown"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "query_snowflake",
+        "description": "Execute SQL query on Snowflake database",
+        "parameters": {
+          "properties": {
+            "query": {
+              "description": "SQL query to execute",
+              "type": "string"
+            },
+            "database": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Database name"
+            },
+            "schema_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Schema name (renamed from 'schema' to avoid Pydantic warning)"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_snowflake_tables",
+        "description": "List available tables in Snowflake database",
+        "parameters": {
+          "properties": {
+            "database": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Database name"
+            },
+            "schema_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Schema name (renamed from 'schema' to avoid Pydantic warning)"
+            }
+          },
+          "type": "object"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_table_schema",
+        "description": "Get schema information for a specific Snowflake table",
+        "parameters": {
+          "properties": {
+            "table_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "table_name"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_database_info",
+        "description": "Get general information about the Snowflake database connection",
+        "parameters": {
+          "properties": {},
+          "type": "object"
+        }
+      }
+    }
+  ],
+  "parallel_tool_calls": false,
+  "messages": [
+    {
+      "content": "You are a data analysis agent working in JupyterLab. You have access to a live Jupyter notebook and can execute code, create visualizations, and manipulate cells in real-time.\n\nCONTEXT YOU RECEIVE:\n1. **Conversation History**: All previous user messages and your responses in this thread\n2. **Current Notebook State**: Complete contents of the active notebook including:\n   - ALL cells (code, markdown, empty) with their actual 0-based indices\n   - Execution status for each code cell (executed with count, or not executed)\n   - Full source code for every cell (not truncated)\n   - Output indicators (plots, data, text)\n\nHOW TO RESPOND:\n- Read the conversation history to understand what the user wants\n- Check the notebook state to see what's already been done\n- Use Jupyter tools to modify the notebook (insert code, delete cells, etc.)\n- The notebook you see IS the notebook the user is working in - your actions affect it directly\n\nTOOL-CALLING CONTRACT (STRICT):\n- Produce exactly ONE tool call per turn\n- Include a short status_message in tool args, summarizing the step you are about to perform\n- Never emit plain-text answers unless using RespondToUser\n- If task is complete, call RespondToUser(intent=\"completion\")\n\nAVAILABLE TOOLS & USAGE:\n\n🔧 JUPYTER TOOLS:\n- insert_and_execute_cell(code, cell_type=\"code\", position=\"end\")\n  USE FOR: Python code execution, data analysis, visualization, computation\n  OUTPUTS: execution_count, text/DataFrame/plot outputs, real-time cell in UI\n  CONTEXT: Check notebook state first, build on existing work, use meaningful variables\n\n- delete_cell(cell_index)\n  USE FOR: Removing failed/duplicate/obsolete cells (use sparingly)\n  CONTEXT: Verify index, consider variable dependencies\n\n💬 COMMUNICATION TOOLS:\n- RespondToUser(message, intent, thread_title)\n  USE FOR: User communication, task completion, clarification requests\n  INTENTS: \"completion\" (ends turn), \"clarification\" (needs input), \"status_update\" (continues)\n  THREAD_TITLE: 3-8 words describing conversation topic\n\n📋 PLANNING TOOLS:\n- CreatePlan(plan_steps)\n  USE FOR: Multi-step tasks (3+ operations), complex analysis, ambiguous requests\n  STEPS: Specific, actionable, 1-2 sentences, logically ordered, 3-7 steps optimal\n  WORKFLOW: Create plan → User edits cards → User says \"proceed\" → Execute edited cards\n\n🗄️ DATABASE TOOLS (only when user mentions databases/SQL):\n- query_snowflake(query, database, schema_name)\n- list_snowflake_tables(database, schema_name)\n- get_table_schema(table_name, database)\n- get_database_info()\n\nPLAN CARD WORKFLOW (CRITICAL):\n\nWHEN TO CREATE PLANS:\n- Multi-step tasks requiring 3+ distinct operations\n- Complex analysis where user input would improve approach\n- Ambiguous requests needing clarification structure\n- High-stakes operations requiring user approval\n\nPLAN PRECEDENCE RULES:\n- Latest plan cards supersede ALL user requests before the plan\n- User messages AFTER a plan can modify or invalidate it\n- If user edits cards, implement EDITED version, not original request\n- Each plan creates a context boundary in conversation\n\nPLAN EXECUTION TRIGGERS:\n- User says: \"proceed\", \"go ahead\", \"implement this\", \"looks good\", \"start\"\n- User provides implementation feedback: \"begin with step 1\"\n- User asks execution questions: \"how will you do step 2?\"\n\nPLAN INVALIDATION SIGNALS:\n- User requests completely different task: \"forget that, do X instead\"\n- User says: \"never mind\", \"cancel that\", \"ignore the plan\"\n- User provides contradictory requirements\n\nCONVERSATION ANALYSIS:\n- Read conversation chronologically to understand context\n- Identify plan boundaries (user messages with [CARD:title|description] and messageType=\"plan\")\n- Plans appear as user messages saying \"Final plan that needs to be implemented:\"\n- Determine current user intent (latest plan + subsequent messages)\n- Ignore superseded requests (messages before latest active plan)\n- If plan cards were edited, implement EDITED content, not original request\n\nDECISION EXAMPLES:\n\nSimple Request: \"Plot sales over time\"\n→ insert_and_execute_cell(code=\"plt.plot(df['date'], df['sales'])\", status_message=\"Creating sales timeline plot\")\n\nComplex Request: \"Build comprehensive sales analysis with predictions\"\n→ CreatePlan([Data loading, EDA, trend analysis, forecasting model, visualization])\n\nClarification Needed: \"Analyze the data\" (no specifics)\n→ RespondToUser(message=\"I'd be happy to analyze your data. Could you specify what type of analysis you're looking for?\", intent=\"clarification\")\n\nPlan Execution: User edited cards and said \"proceed\"\n→ Execute first edited card step with insert_and_execute_cell\n\nTask Complete: Analysis finished with results\n→ RespondToUser(message=\"Analysis complete. Results show...\", intent=\"completion\")\n\nThe conversation history shows you everything - read it naturally and respond appropriately to the user's current intent.",
+      "role": "system"
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Current Context:\n--------\nNotebook Context Guide:\n\nThe notebook state below shows ALL cells with their ACTUAL indices (0-based). This includes:\n- Code cells (executed and not executed)\n- Markdown cells\n- Empty cells\n- Images from plots/charts (you can see these images directly)\n\nCRITICAL INDEX USAGE:\n- Cell indices shown as \"Cell [N]\" are 0-based positions in the notebook\n- When using delete_cell(cell_index), use the EXACT index N shown in \"Cell [N]\"\n- Do NOT skip or renumber - use the index exactly as shown\n\nCell Status Indicators:\n- ✅ Code cell (executed #N) = Cell was run successfully (execution count N)\n- ✅ Code cell (executed #N) with outputs = Cell produced results/plots/data\n- ⏸️ Code cell (not executed) = Code cell exists but hasn't been run yet\n- 📝 Markdown cell = Documentation/text cell\n- Empty cells are shown with no content after the cell header\n\nCurrent Notebook State:\nAll Notebook Cells (0-based indexing):\n"
+        },
+        {
+          "type": "text",
+          "text": "Cell [0]: 📝 Markdown cell\nif x=(1,2,3,4) and y=2x, plot x,y in first cell, x,y**2 and so on until x,y**5. first plan and then execute\n\n"
+        },
+        {
+          "type": "text",
+          "text": "Cell [1]: 📝 Markdown cell\ncan you conduct a customer churn analysis based on dummy data for me\n\n"
+        },
+        {
+          "type": "text",
+          "text": "\nCRITICAL: Use the notebook state to understand what work has already been completed. You can SEE the actual plots and charts that were generated. Current Iteration: 2"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": "can you conduct a customer churn analysis based on dummy data for me",
+      "role": "user"
+    },
+    {
+      "content": "Final plan that needs to be implemented:\n\n[CARD:Generate Dummy Data|Create a synthetic dataset that simulates customer data, including features like customer ID, tenure, services used, and whether they have churned.]\n[CARD:Explore Data|Perform exploratory data analysis (EDA) to understand the distribution of features and identify any patterns or anomalies.]\n[CARD:Preprocess Data|Prepare the data for analysis by handling missing values, encoding categorical variables, and scaling numerical features.]\n[CARD:Build Churn Prediction Model|Develop a machine learning model to predict customer churn using the processed data. Evaluate the model's performance using appropriate metrics.]\n[CARD:Visualize Results|Create visualizations to illustrate the findings from the churn analysis, including feature importance and model performance.]",
+      "role": "user"
+    },
+    {
+      "content": "proceed",
+      "role": "user"
+    },
+    {
+      "content": "[insert_and_execute_cell] Generating synthetic customer data for churn analysis",
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "type": "function",
+          "id": "call_V8IkHq2Dw72cFlRhhVJdWk3U",
+          "function": {
+            "name": "insert_and_execute_cell",
+            "arguments": "{\"code\": \"import pandas as pd\\nimport numpy as np\\n\\n# Set random seed for reproducibility\\nnp.random.seed(42)\\n\\n# Generate synthetic customer data\\ndata = {\\n    'customer_id': range(1, 101),\\n    'tenure': np.random.randint(1, 72, size=100),  # tenure in months\\n    'services_used': np.random.choice(['internet', 'phone', 'both'], size=100),\\n    'monthly_charges': np.random.uniform(20, 100, size=100),\\n    'total_charges': np.random.uniform(100, 5000, size=100),\\n    'churn': np.random.choice([0, 1], size=100, p=[0.8, 0.2])  # 0 for no churn, 1 for churn\\n}\\n\\n# Create DataFrame\\ndummy_data = pd.DataFrame(data)\\n\\ndummy_data.head()\", \"status_message\": \"Generating synthetic customer data for churn analysis\"}"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Code executed successfully. execution_count=1, outputs_count=1",
+      "role": "tool",
+      "tool_call_id": "call_V8IkHq2Dw72cFlRhhVJdWk3U"
+    }
+  ]
+}

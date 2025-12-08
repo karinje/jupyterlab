@@ -15,13 +15,15 @@ from ..schemas import SnowflakeQueryArgs, ListTablesArgs
 # Set up proper logging using simplified config
 try:
     from jupyter_tools_bridge.logging_config import get_logger
+
     logger = get_logger()
 except ImportError:
     # Fallback if centralized logging not available
     import logging
+
     logging.basicConfig(
         level=logging.INFO,
-        format='[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s'
+        format="[%(asctime)s] [%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
     )
     logger = logging.getLogger("jupyterlab")
 
@@ -90,7 +92,9 @@ def create_mcp_tools(mcp_client) -> List[StructuredTool]:
             logger.error(f"Error in query_snowflake: {e}")
             return f"Error executing query: {str(e)}"
 
-    async def list_snowflake_tables(database: str = None, schema_name: str = None) -> str:
+    async def list_snowflake_tables(
+        database: str = None, schema_name: str = None
+    ) -> str:
         """
         List available tables in Snowflake database.
 
@@ -207,11 +211,11 @@ def create_mcp_tools(mcp_client) -> List[StructuredTool]:
             coroutine=get_database_info,
         ),
     ]
-    
+
     # Add category metadata to all MCP tools
     for tool in tools:
         if not tool.metadata:
             tool.metadata = {}
-        tool.metadata['tool_category'] = "Snowflake MCP Tools"
-    
+        tool.metadata["tool_category"] = "Snowflake MCP Tools"
+
     return tools

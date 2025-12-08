@@ -20,7 +20,10 @@ from .tools import create_jupyter_tools
 from jupyter_tools_bridge.tools import JupyterTools
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
-from langchain_core.callbacks import CallbackManagerForLLMRun, AsyncCallbackManagerForLLMRun
+from langchain_core.callbacks import (
+    CallbackManagerForLLMRun,
+    AsyncCallbackManagerForLLMRun,
+)
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatResult
 from pydantic import create_model, Field, BaseModel
@@ -175,7 +178,9 @@ class ChatHandler:
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=10),
                 )
-                logger.info(f"💾 Saved {len(messages)} tool interaction messages to thread")
+                logger.info(
+                    f"💾 Saved {len(messages)} tool interaction messages to thread"
+                )
         except Exception as e:
             logger.warning(f"Failed to save tool interactions: {e}")
 
@@ -236,9 +241,7 @@ class LoggingChatOpenAI(ChatOpenAI):
         if self._logging_enabled():
             payload = self._get_request_payload(messages, stop=stop, **kwargs)
             self._log_payload(payload)
-        return super()._generate(
-            messages, stop=stop, run_manager=run_manager, **kwargs
-        )
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
     async def _agenerate(
         self,
@@ -319,7 +322,7 @@ class JupyterAgent:
         # Gemini support - uncomment when API key available
         # from langchain_google_genai import ChatGoogleGenerativeAI
         # self.gemini_llm = ChatGoogleGenerativeAI(
-        #     api_key=gemini_api_key, 
+        #     api_key=gemini_api_key,
         #     model="gemini-2.0-flash-exp",
         #     temperature=0.2
         # )
@@ -414,7 +417,7 @@ class JupyterAgent:
                 )
             except Exception:
                 pass
-        
+
         self.claude_llm_with_tools = (
             self.claude_llm.bind_tools(
                 augmented_tools, parallel_tool_calls=False, tool_choice="any"
@@ -431,7 +434,7 @@ class JupyterAgent:
                 )
             except Exception:
                 pass
-        
+
         self.gemini_llm_with_tools = (
             self.gemini_llm.bind_tools(
                 augmented_tools, parallel_tool_calls=False, tool_choice="any"
@@ -827,7 +830,7 @@ class JupyterAgent:
         self, final_state: Dict[str, Any], notebook_path: str, thread_id: str
     ):
         """Extract and save tool interaction messages to conversation thread.
-        
+
         Converts LangChain message objects to OpenAI-compatible dict format and saves them.
         These messages are filtered from UI display but included in LLM context.
         """
@@ -836,20 +839,19 @@ class JupyterAgent:
 
             messages = final_state.get("messages", [])
             if not messages:
-                logger.info("💾 No state messages to persist - state['messages'] is empty")
+                logger.info(
+                    "💾 No state messages to persist - state['messages'] is empty"
+                )
                 return
 
             # Get initial conversation length to determine which messages are NEW
             initial_conv_history = final_state.get("conversation_history", [])
-            logger.info(
-                f"💾 state['messages'] has {len(messages)} total messages"
-            )
+            logger.info(f"💾 state['messages'] has {len(messages)} total messages")
             logger.info(
                 f"💾 conversation_history had {len(initial_conv_history)} messages at start"
             )
-            
+
             # Log EXACT content of state["messages"] for debugging
-            import json
             for i, msg in enumerate(messages):
                 msg_type = type(msg).__name__
                 tool_calls = getattr(msg, "tool_calls", [])
@@ -897,31 +899,46 @@ class JupyterAgent:
                 # ToolMessage (result from tool execution)
                 elif isinstance(msg, ToolMessage):
                     tool_name = getattr(msg, "name", "unknown")
-                    
+
                     # Special handling for CreatePlan - save as user message with plan format
                     if tool_name == "CreatePlan":
                         # Extract plan steps from the AIMessage that called CreatePlan
                         # Find the corresponding AIMessage with CreatePlan tool_call
                         for prev_msg in messages:
-                            if isinstance(prev_msg, AIMessage) and getattr(prev_msg, "tool_calls", []):
+                            if isinstance(prev_msg, AIMessage) and getattr(
+                                prev_msg, "tool_calls", []
+                            ):
                                 prev_tool_calls = prev_msg.tool_calls
-                                if prev_tool_calls and prev_tool_calls[0].get("name") == "CreatePlan":
+                                if (
+                                    prev_tool_calls
+                                    and prev_tool_calls[0].get("name") == "CreatePlan"
+                                ):
                                     # Extract plan_steps from the tool call arguments
-                                    plan_steps = prev_tool_calls[0].get("args", {}).get("plan_steps", [])
-                                    
+                                    plan_steps = (
+                                        prev_tool_calls[0]
+                                        .get("args", {})
+                                        .get("plan_steps", [])
+                                    )
+
                                     # Convert to [CARD:title|description] format
-                                    plan_content = "Final plan that needs to be implemented:\n\n"
+                                    plan_content = (
+                                        "Final plan that needs to be implemented:\n\n"
+                                    )
                                     for step in plan_steps:
                                         title = step.get("title", "")
                                         description = step.get("description", "")
-                                        plan_content += f"[CARD:{title}|{description}]\n"
-                                    
+                                        plan_content += (
+                                            f"[CARD:{title}|{description}]\n"
+                                        )
+
                                     plan_message = {
                                         "role": "user",
                                         "content": plan_content.strip(),
-                                        "metadata": {"messageType": "plan"}
+                                        "metadata": {"messageType": "plan"},
                                     }
-                                    usage = getattr(msg, "response_metadata", None) or getattr(prev_msg, "response_metadata", None)
+                                    usage = getattr(
+                                        msg, "response_metadata", None
+                                    ) or getattr(prev_msg, "response_metadata", None)
                                     if usage:
                                         plan_message["metadata"]["usage"] = usage
                                     messages_to_save.append(plan_message)
@@ -953,11 +970,14 @@ class JupyterAgent:
                     messages_to_save, notebook_path, thread_id
                 )
             else:
-                logger.info("💾 No tool interaction messages to persist (only RespondToUser/CreatePlan)")
+                logger.info(
+                    "💾 No tool interaction messages to persist (only RespondToUser/CreatePlan)"
+                )
 
         except Exception as e:
             logger.error(f"❌ Failed to persist tool messages: {e}")
             import traceback
+
             logger.error(f"Traceback: {traceback.format_exc()}")
 
     async def process_request(
@@ -1001,12 +1021,25 @@ class JupyterAgent:
                 f"🔍 notebook_path in initial_state: {initial_state.get('notebook_path', 'MISSING')}"
             )
 
-            # Get current notebook state and available data sources  
-            notebook_multimodal_content = await self.notebook_state_manager.get_complete_notebook_state(
-                notebook_path
+            # Get current notebook state and available data sources
+            notebook_multimodal_content = (
+                await self.notebook_state_manager.get_complete_notebook_state(
+                    notebook_path
+                )
             )
             # Store minimal cell info for state tracking
-            initial_state["notebook_cells"] = [{"index": i} for i in range(len([item for item in notebook_multimodal_content if "Index" in item.get("text", "")]))]
+            initial_state["notebook_cells"] = [
+                {"index": i}
+                for i in range(
+                    len(
+                        [
+                            item
+                            for item in notebook_multimodal_content
+                            if "Index" in item.get("text", "")
+                        ]
+                    )
+                )
+            ]
             initial_state[
                 "execution_history"
             ] = await self.notebook_state_manager.get_execution_history(notebook_path)
@@ -1160,7 +1193,6 @@ Task Complete: Analysis finished with results
 
 The conversation history shows you everything - read it naturally and respond appropriately to the user's current intent."""
 
-
     async def analyze_and_decide(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Core decision node - LLM analyzes context and decides next action via tool calls"""
         try:
@@ -1181,16 +1213,31 @@ The conversation history shows you everything - read it naturally and respond ap
                 return state
 
             # Always refresh notebook state - get COMPLETE ready-to-use multimodal content
-            notebook_multimodal_content = await self.notebook_state_manager.get_complete_notebook_state(
-                notebook_path
+            notebook_multimodal_content = (
+                await self.notebook_state_manager.get_complete_notebook_state(
+                    notebook_path
+                )
             )
             # Store raw cell count for state (agent logic still needs this for iteration tracking)
-            state["notebook_cells"] = [{"index": i} for i in range(len([item for item in notebook_multimodal_content if "Index" in item.get("text", "")]))]
-            
-            logger.info(f"🧠 [analyze_and_decide] Got {len(notebook_multimodal_content)} multimodal items for path={notebook_path}")
+            state["notebook_cells"] = [
+                {"index": i}
+                for i in range(
+                    len(
+                        [
+                            item
+                            for item in notebook_multimodal_content
+                            if "Index" in item.get("text", "")
+                        ]
+                    )
+                )
+            ]
+
+            logger.info(
+                f"🧠 [analyze_and_decide] Got {len(notebook_multimodal_content)} multimodal items for path={notebook_path}"
+            )
 
             provider = state.get("llm_provider", "openai")
-            
+
             # Select LLM based on provider
             if provider == "openai":
                 llm = self.openai_llm_with_tools
@@ -1200,19 +1247,21 @@ The conversation history shows you everything - read it naturally and respond ap
                 llm = self.gemini_llm_with_tools
             else:
                 llm = self.openai_llm_with_tools  # Default fallback
-            
+
             if not llm:
                 raise ValueError(f"No LLM configured for provider: {provider}")
 
             # Create system message (TEXT ONLY - OpenAI doesn't allow images in system!)
             system_instructions = self._create_system_instructions()
             system_message = {"role": "system", "content": system_instructions}
-            
+
             # Create notebook context as USER message (OpenAI requires images in user role!)
             # This maintains perfect sequence: cell code → outputs → images → next cell
             notebook_context_content = []
-            notebook_context_content.extend(notebook_multimodal_content)  # Already has everything in sequence!
-            
+            notebook_context_content.extend(
+                notebook_multimodal_content
+            )  # Already has everything in sequence!
+
             # Add iteration info at the end (NOT cached - changes every turn)
             notebook_context_content.append(
                 {
@@ -1224,32 +1273,57 @@ The conversation history shows you everything - read it naturally and respond ap
             # For Claude: Add cache control to the last stable content item (before iteration info)
             if provider == "claude" and len(notebook_context_content) > 1:
                 # Mark the last notebook content item (before iteration info) as cacheable
-                last_notebook_item_idx = len(notebook_context_content) - 2  # -2 because we just added iteration info
+                last_notebook_item_idx = (
+                    len(notebook_context_content) - 2
+                )  # -2 because we just added iteration info
                 if last_notebook_item_idx >= 0:
-                    notebook_context_content[last_notebook_item_idx]["cache_control"] = {"type": "ephemeral"}
-                    logger.info(f"🔖 Added Anthropic cache_control marker at position {last_notebook_item_idx}")
+                    notebook_context_content[last_notebook_item_idx][
+                        "cache_control"
+                    ] = {"type": "ephemeral"}
+                    logger.info(
+                        f"🔖 Added Anthropic cache_control marker at position {last_notebook_item_idx}"
+                    )
 
-            notebook_context_message = {"role": "user", "content": notebook_context_content}
-            
+            notebook_context_message = {
+                "role": "user",
+                "content": notebook_context_content,
+            }
+
             # Count images for logging
-            image_count = len([item for item in notebook_context_content if item.get("type") == "image_url"])
-            logger.info(f"🖼️ Created notebook context (USER role) with {len(notebook_context_content)} items ({image_count} images)")
-            
+            image_count = len(
+                [
+                    item
+                    for item in notebook_context_content
+                    if item.get("type") == "image_url"
+                ]
+            )
+            logger.info(
+                f"🖼️ Created notebook context (USER role) with {len(notebook_context_content)} items ({image_count} images)"
+            )
+
             # Log COMPLETE notebook context being sent to LLM
-            logger.info("📋 [NOTEBOOK CONTEXT] Complete notebook context being sent to LLM (as USER message):")
+            logger.info(
+                "📋 [NOTEBOOK CONTEXT] Complete notebook context being sent to LLM (as USER message):"
+            )
             for i, item in enumerate(notebook_context_content):
                 item_type = item.get("type", "unknown")
                 if item_type == "text":
                     text_content = item.get("text", "")
-                    logger.info(f"📋 [CONTEXT][{i}] TEXT ({len(text_content)} chars): {text_content}")
+                    logger.info(
+                        f"📋 [CONTEXT][{i}] TEXT ({len(text_content)} chars): {text_content}"
+                    )
                 elif item_type == "image_url":
                     url = item.get("image_url", {}).get("url", "")
                     if "data:" in url and "base64," in url:
                         parts = url.split(";")
-                        mime_type = parts[0].replace("data:", "") if parts else "unknown"
+                        mime_type = (
+                            parts[0].replace("data:", "") if parts else "unknown"
+                        )
                         data_part = url.split("base64,")[1] if "base64," in url else ""
                         data_size = len(data_part)
-                        logger.info(f"📋 [CONTEXT][{i}] IMAGE: {mime_type}, {data_size} base64 chars")
+                        logger.info(
+                            f"📋 [CONTEXT][{i}] IMAGE: {mime_type}, {data_size} base64 chars"
+                        )
                     else:
                         logger.info(f"📋 [CONTEXT][{i}] IMAGE: {url[:100]}...")
 
@@ -1268,8 +1342,10 @@ The conversation history shows you everything - read it naturally and respond ap
                 logger.info(
                     "🧠 [analyze_and_decide] No conversation history to include"
                 )
-            
-            logger.info(f"🔄 Message order: system(1) → notebook(1) → conversation({len(conversation_history)}) = {len(messages)} total")
+
+            logger.info(
+                f"🔄 Message order: system(1) → notebook(1) → conversation({len(conversation_history)}) = {len(messages)} total"
+            )
 
             # Note: Current user message is already included in conversation_history
             # Don't add original_request separately - it's just the first message in the thread
@@ -1283,10 +1359,13 @@ The conversation history shows you everything - read it naturally and respond ap
             logger.info(
                 f"🧠 [analyze_and_decide] Final message count: {len(messages)} (system=1, notebook=1, conversation={len(conversation_history)}, state={len(state['messages'])})"
             )
-            logger.info(f"🔖 Cache optimization: System + Notebook prefix stable, conversation grows, state messages appended")
+            logger.info(
+                "🔖 Cache optimization: System + Notebook prefix stable, conversation grows, state messages appended"
+            )
 
             # Log EXACT message structure as it will be sent to LLM (no formatting/truncation)
             import json
+
             for i, msg in enumerate(messages):
                 # Convert to dict for logging (handles both LangChain objects and dicts)
                 if hasattr(msg, "dict"):  # LangChain message object
@@ -1295,7 +1374,7 @@ The conversation history shows you everything - read it naturally and respond ap
                     msg_dict = msg.model_dump()
                 else:  # Already a dict
                     msg_dict = msg
-                
+
                 # Log the EXACT structure that LLM sees
                 logger.debug(f"  Message {i}: {json.dumps(msg_dict, indent=2)}")
 
@@ -1374,13 +1453,13 @@ The conversation history shows you everything - read it naturally and respond ap
                 tool_name = first_tool_call.get("name", "unknown_tool")
                 tool_args = first_tool_call.get("args", {})
                 status_msg = tool_args.get("status_message", "")
-                
+
                 # Create informative content instead of empty string
                 if status_msg:
                     tool_response.content = f"[{tool_name}] {status_msg}"
                 else:
                     tool_response.content = f"[{tool_name}] Executing tool..."
-                    
+
             state["messages"].append(tool_response)
             # If no tool_calls, inject a user-style correction nudge (retry cap handled by routing)
             if not getattr(tool_response, "tool_calls", []):
@@ -1472,7 +1551,6 @@ The conversation history shows you everything - read it naturally and respond ap
             logger.error(f"❌ Error sending response: {e}")
             state["reasoning"] = f"Error sending response: {e}"
             return state
-
 
     def _generate_summary(self, state: Dict[str, Any]) -> str:
         """Generate analysis summary"""
